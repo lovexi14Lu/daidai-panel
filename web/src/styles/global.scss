@@ -1,0 +1,217 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#app {
+  height: 100%;
+}
+
+:root {
+  --el-color-primary: #409eff;
+  --el-color-primary-light-3: #79bbff;
+  --el-color-primary-light-5: #a0cfff;
+  --el-color-primary-light-7: #c6e2ff;
+  --el-color-primary-light-9: #ecf5ff;
+  --el-color-primary-dark-2: #337ecc;
+  --el-border-radius-base: 8px;
+  --el-border-radius-small: 4px;
+  --el-border-radius-round: 20px;
+  --dd-sidebar-width: 220px;
+  --dd-header-height: 56px;
+  --dd-page-padding: 20px;
+  --dd-card-radius: 12px;
+  --dd-transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+a {
+  text-decoration: none;
+  color: inherit;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--el-border-color);
+  border-radius: 3px;
+  &:hover {
+    background: var(--el-text-color-placeholder);
+  }
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.el-button {
+  border-radius: var(--el-border-radius-base);
+  font-weight: 500;
+  transition: all var(--dd-transition);
+}
+
+.el-card {
+  border-radius: var(--dd-card-radius);
+  border: 1px solid var(--el-border-color-lighter);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+  transition: all var(--dd-transition);
+  overflow: hidden;
+
+  &:hover {
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+  }
+
+  .el-card__header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--el-border-color-lighter);
+    font-weight: 600;
+  }
+
+  .el-card__body {
+    padding: 20px;
+  }
+}
+
+.el-dialog {
+  border-radius: 16px;
+  overflow: hidden;
+
+  .el-dialog__header {
+    padding: 20px 24px 16px;
+    margin-right: 0;
+    border-bottom: 1px solid var(--el-border-color-lighter);
+  }
+
+  .el-dialog__body {
+    padding: 24px;
+  }
+
+  .el-dialog__footer {
+    padding: 16px 24px 20px;
+    border-top: 1px solid var(--el-border-color-lighter);
+  }
+}
+
+.el-table {
+  --el-table-border-color: var(--el-border-color-lighter);
+
+  th.el-table__cell {
+    background: var(--el-fill-color-light);
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--el-text-color-regular);
+  }
+
+  .el-table__row {
+    transition: background-color 0.2s;
+  }
+}
+
+.el-tag {
+  border-radius: 6px;
+  font-weight: 500;
+}
+
+.el-input {
+  .el-input__wrapper {
+    border-radius: var(--el-border-radius-base);
+    transition: box-shadow var(--dd-transition);
+  }
+}
+
+.el-select {
+  .el-select__wrapper {
+    border-radius: var(--el-border-radius-base);
+  }
+}
+
+.el-form-item__label {
+  font-weight: 500;
+  color: var(--el-text-color-regular);
+}
+
+.el-menu {
+  border-right: none !important;
+
+  .el-menu-item {
+    border-radius: 8px;
+    margin: 2px 8px;
+    height: 44px;
+    line-height: 44px;
+    transition: all 0.2s;
+
+    &.is-active {
+      background: var(--el-color-primary-light-9);
+      color: var(--el-color-primary);
+      font-weight: 600;
+    }
+
+    &:hover:not(.is-active) {
+      background: var(--el-fill-color-light);
+    }
+  }
+}
+
+.el-message-box {
+  border-radius: 16px;
+  padding: 24px;
+}
+
+.el-notification {
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+.el-drawer {
+  .el-drawer__header {
+    margin-bottom: 0;
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--el-border-color-lighter);
+  }
+
+  .el-drawer__body {
+    padding: 24px;
+  }
+}
+
+.el-pagination {
+  .el-pager li {
+    border-radius: 6px;
+    min-width: 32px;
+    height: 32px;
+    line-height: 32px;
+    font-weight: 500;
+  }
+
+  .btn-prev, .btn-next {
+    border-radius: 6px;
+  }
+}
+
+html.dark {
+  .el-card {
+    border-color: var(--el-border-color-darker);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.2);
+
+    &:hover {
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+    }
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.15);
+    &:hover {
+      background: rgba(255, 255, 255, 0.25);
+    }
+  }
+}

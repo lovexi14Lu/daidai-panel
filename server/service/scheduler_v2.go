@@ -1,0 +1,294 @@
+package service
+
+import (
+	"fmt"
+	"log"
+	"sync"
+	"time"
+
+	"daidai-panel/database"
+	"daidai-panel/model"
+
+	"github.com/robfig/cron/v3"
+)
+
+type SchedulerConfig struct {
+	WorkerCount  int
+	QueueSize    int
+	RateInterval time.Duration
+}
+
+type ExecutionRequest struct {
+	TaskID      uint
+	Task        *model.Task
+	TriggerType string
+	RetryIndex  int
+	LogID       string
+	TaskLogID   uint
+}
+
+type ExecutionResult struct {
+	Success  bool
+	ExitCode int
+	Duration float64
+	Output   string
+	Error    error
+}
+
+type SchedulerEventHandler interface {
+	OnTaskScheduled(req *ExecutionRequest)
+	OnTaskExecuting(req *ExecutionRequest) error
+	OnTaskStarted(req *ExecutionRequest)
+	OnTaskCompleted(req *ExecutionRequest, result *ExecutionResult)
+	OnTaskFailed(req *ExecutionRequest, err error)
+}
+
+type SchedulerV2 struct {
+	config       SchedulerConfig
+	cron         *cron.Cron
+	entryMap     map[uint]cron.EntryID
+	entryLock    sync.RWMutex
+	taskQueue    chan *ExecutionRequest
+	rateLimiter  <-chan time.Time
+	stopCh       chan struct{}
+	wg           sync.WaitGroup
+	handler      SchedulerEventHandler
+	runningTasks map[uint][]int64
+	runningLock  sync.RWMutex
+}
+
+func NewSchedulerV2(config SchedulerConfig, handler SchedulerEventHandler) *SchedulerV2 {
+	if config.WorkerCount <= 0 {
+		config.WorkerCount = 4
+	}
+	if config.QueueSize <= 0 {
+		config.QueueSize = 100
+	}
+	if config.RateInterval <= 0 {
+		config.RateInterval = 200 * time.Millisecond
+	}
+
+	s := &SchedulerV2{
+		config:       config,
+		cron:         cron.New(cron.WithSeconds(), cron.WithChain(cron.Recover(cron.DefaultLogger))),
+		entryMap:     make(map[uint]cron.EntryID),
+		taskQueue:    make(chan *ExecutionRequest, config.QueueSize),
+		rateLimiter:  time.Tick(config.RateInterval),
+		stopCh:       make(chan struct{}),
+		handler:      handler,
+		runningTasks: make(map[uint][]int64),
+	}
+
+	return s
+}
+
+func (s *SchedulerV2) Start() {
+	for i := 0; i < s.config.WorkerCount; i++ {
+		s.wg.Add(1)
+		go s.worker(i)
+	}
+
+	s.cron.Start()
+	log.Printf("scheduler v2 started: %d workers, queue size %d", s.config.WorkerCount, s.config.QueueSize)
+}
+
+func (s *SchedulerV2) Stop() {
+	ctx := s.cron.Stop()
+	<-ctx.Done()
+
+	close(s.stopCh)
+	s.wg.Wait()
+
+	log.Println("scheduler v2 stopped")
+}
+
+func (s *SchedulerV2) worker(id int) {
+	defer s.wg.Done()
+
+	for {
+		select {
+		case <-s.stopCh:
+			return
+		case req := <-s.taskQueue:
+			<-s.rateLimiter
+			s.executeTask(req)
+		}
+	}
+}
+
+func (s *SchedulerV2) executeTask(req *ExecutionRequest) {
+	if !s.checkConcurrency(req) {
+		log.Printf("task %d: concurrency limit reached, skipping", req.TaskID)
+		return
+	}
+
+	goid := getGoroutineID()
+	s.addRunningTask(req.TaskID, goid)
+	defer s.removeRunningTask(req.TaskID, goid)
+
+	if s.handler != nil {
+		s.handler.OnTaskScheduled(req)
+	}
+
+	err := s.handler.OnTaskExecuting(req)
+	if err != nil {
+		if s.handler != nil {
+			s.handler.OnTaskFailed(req, err)
+		}
+		return
+	}
+
+	if s.handler != nil {
+		s.handler.OnTaskStarted(req)
+	}
+}
+
+func (s *SchedulerV2) checkConcurrency(req *ExecutionRequest) bool {
+	if req.Task.AllowMultipleInstances {
+		return true
+	}
+
+	s.runningLock.RLock()
+	defer s.runningLock.RUnlock()
+
+	goids, exists := s.runningTasks[req.TaskID]
+	return !exists || len(goids) == 0
+}
+
+func (s *SchedulerV2) addRunningTask(taskID uint, goid int64) {
+	s.runningLock.Lock()
+	defer s.runningLock.Unlock()
+
+	if s.runningTasks[taskID] == nil {
+		s.runningTasks[taskID] = []int64{}
+	}
+	s.runningTasks[taskID] = append(s.runningTasks[taskID], goid)
+}
+
+func (s *SchedulerV2) removeRunningTask(taskID uint, goid int64) {
+	s.runningLock.Lock()
+	defer s.runningLock.Unlock()
+
+	goids := s.runningTasks[taskID]
+	for i, id := range goids {
+		if id == goid {
+			s.runningTasks[taskID] = append(goids[:i], goids[i+1:]...)
+			break
+		}
+	}
+
+	if len(s.runningTasks[taskID]) == 0 {
+		delete(s.runningTasks, taskID)
+	}
+}
+
+func (s *SchedulerV2) Enqueue(req *ExecutionRequest) error {
+	select {
+	case s.taskQueue <- req:
+		return nil
+	default:
+		return fmt.Errorf("task queue is full")
+	}
+}
+
+func (s *SchedulerV2) EnqueueDelayed(delay time.Duration, reqFunc func() *ExecutionRequest) {
+	go func() {
+		time.Sleep(delay)
+		req := reqFunc()
+		if req != nil {
+			s.Enqueue(req)
+		}
+	}()
+}
+
+func (s *SchedulerV2) AddJob(task *model.Task) error {
+	s.entryLock.Lock()
+	defer s.entryLock.Unlock()
+
+	if oldID, exists := s.entryMap[task.ID]; exists {
+		s.cron.Remove(oldID)
+		delete(s.entryMap, task.ID)
+	}
+
+	if task.Status != model.TaskStatusEnabled {
+		return nil
+	}
+
+	cronExpr := toCronV3(task.CronExpression)
+	if cronExpr == "" {
+		return fmt.Errorf("invalid cron expression for task %d: %s", task.ID, task.CronExpression)
+	}
+
+	taskID := task.ID
+	entryID, err := s.cron.AddFunc(cronExpr, func() {
+		var t model.Task
+		database.DB.First(&t, taskID)
+		req := &ExecutionRequest{
+			TaskID:      taskID,
+			Task:        &t,
+			TriggerType: "cron",
+			RetryIndex:  0,
+		}
+		s.Enqueue(req)
+	})
+
+	if err != nil {
+		return err
+	}
+
+	s.entryMap[task.ID] = entryID
+	return nil
+}
+
+func (s *SchedulerV2) UpdateJob(task *model.Task) error {
+	return s.AddJob(task)
+}
+
+func (s *SchedulerV2) RemoveJob(taskID uint) {
+	s.entryLock.Lock()
+	defer s.entryLock.Unlock()
+
+	if entryID, exists := s.entryMap[taskID]; exists {
+		s.cron.Remove(entryID)
+		delete(s.entryMap, taskID)
+	}
+}
+
+func (s *SchedulerV2) RunNow(taskID uint) error {
+	var task model.Task
+	if err := database.DB.First(&task, taskID).Error; err != nil {
+		return err
+	}
+
+	req := &ExecutionRequest{
+		TaskID:      taskID,
+		Task:        &task,
+		TriggerType: "manual",
+		RetryIndex:  0,
+	}
+
+	return s.Enqueue(req)
+}
+
+func (s *SchedulerV2) GetQueueLength() int {
+	return len(s.taskQueue)
+}
+
+func (s *SchedulerV2) GetRunningCount() int {
+	s.runningLock.RLock()
+	defer s.runningLock.RUnlock()
+
+	count := 0
+	for _, goids := range s.runningTasks {
+		count += len(goids)
+	}
+	return count
+}
+
+func (s *SchedulerV2) GetHandler() SchedulerEventHandler {
+	return s.handler
+}
+
+func getGoroutineID() int64 {
+	return time.Now().UnixNano()
+}

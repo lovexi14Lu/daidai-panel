@@ -1,0 +1,247 @@
+package service
+
+import (
+	"fmt"
+	"log"
+	"math/rand"
+	"os"
+	"sync"
+	"time"
+
+	"daidai-panel/config"
+	"daidai-panel/database"
+	"daidai-panel/model"
+)
+
+type TaskExecutor struct {
+	scriptsDir       string
+	logDir           string
+	runningProcesses map[uint]*os.Process
+	processLock      sync.Mutex
+}
+
+func NewTaskExecutor() *TaskExecutor {
+	return &TaskExecutor{
+		scriptsDir:       config.C.Data.ScriptsDir,
+		logDir:           config.C.Data.LogDir,
+		runningProcesses: make(map[uint]*os.Process),
+	}
+}
+
+func (e *TaskExecutor) OnTaskScheduled(req *ExecutionRequest) {
+	log.Printf("task %d scheduled: %s", req.TaskID, req.Task.Name)
+}
+
+func (e *TaskExecutor) OnTaskExecuting(req *ExecutionRequest) error {
+	task := req.Task
+
+	if task.DependsOn != nil {
+		var depTask model.Task
+		if err := database.DB.First(&depTask, *task.DependsOn).Error; err == nil {
+			if depTask.LastRunStatus == nil || *depTask.LastRunStatus != model.RunSuccess {
+				return fmt.Errorf("依赖任务 '%s' 上次执行未成功", depTask.Name)
+			}
+		}
+	}
+
+	randomDelay := model.GetConfigInt("random_delay", 0)
+	if randomDelay > 0 {
+		delay := rand.Intn(randomDelay) + 1
+		time.Sleep(time.Duration(delay) * time.Second)
+	}
+
+	now := time.Now()
+	database.DB.Model(task).Updates(map[string]interface{}{
+		"status":      model.TaskStatusRunning,
+		"last_run_at": now,
+	})
+
+	logID := fmt.Sprintf("%d_%d", task.ID, now.UnixNano())
+	tinyLog, err := GetTinyLogManager().Create(logID)
+	if err != nil {
+		return fmt.Errorf("failed to create log: %w", err)
+	}
+
+	runningStatus := model.LogStatusRunning
+	taskLog := &model.TaskLog{
+		TaskID:    task.ID,
+		Status:    &runningStatus,
+		StartedAt: now,
+	}
+	database.DB.Create(taskLog)
+
+	req.LogID = logID
+	req.TaskLogID = taskLog.ID
+
+	go e.runTask(req, taskLog, tinyLog)
+
+	return nil
+}
+
+func (e *TaskExecutor) OnTaskStarted(req *ExecutionRequest) {
+	log.Printf("task %d started: %s", req.TaskID, req.Task.Name)
+}
+
+func (e *TaskExecutor) OnTaskCompleted(req *ExecutionRequest, result *ExecutionResult) {
+	log.Printf("task %d completed: success=%v, duration=%.2fs",
+		req.TaskID, result.Success, result.Duration)
+}
+
+func (e *TaskExecutor) OnTaskFailed(req *ExecutionRequest, err error) {
+	log.Printf("task %d failed: %v", req.TaskID, err)
+
+	task := req.Task
+	database.DB.Model(task).Updates(map[string]interface{}{
+		"status": model.TaskStatusEnabled,
+	})
+}
+
+func (e *TaskExecutor) StopTask(taskID uint) bool {
+	e.processLock.Lock()
+	defer e.processLock.Unlock()
+
+	if p, ok := e.runningProcesses[taskID]; ok {
+		p.Kill()
+		delete(e.runningProcesses, taskID)
+		return true
+	}
+	return false
+}
+
+func (e *TaskExecutor) runTask(req *ExecutionRequest, taskLog *model.TaskLog, tinyLog *TinyLog) {
+	task := req.Task
+	startTime := time.Now()
+	exitCode := 0
+	success := false
+
+	var envVarRecords []model.EnvVar
+	database.DB.Where("enabled = ?", true).Find(&envVarRecords)
+	envVars := make(map[string]string)
+	for _, ev := range envVarRecords {
+		if existing, ok := envVars[ev.Name]; ok {
+			envVars[ev.Name] = existing + "&" + ev.Value
+		} else {
+			envVars[ev.Name] = ev.Value
+		}
+	}
+
+	commandTimeout := model.GetConfigInt("command_timeout", 300)
+	maxLogSize := model.GetConfigInt("max_log_content_size", 102400)
+
+	timeout := task.Timeout
+	if timeout <= 0 {
+		timeout = commandTimeout
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("task %d panicked: %v", req.TaskID, r)
+			fmt.Fprintf(tinyLog, "\n[任务异常崩溃: %v]\n", r)
+			exitCode = 1
+		}
+
+		duration := time.Since(startTime).Seconds()
+
+		compressed, _ := tinyLog.Close()
+		GetTinyLogManager().Remove(tinyLog.LogID)
+
+		logStatus := model.LogStatusSuccess
+		if exitCode != 0 {
+			logStatus = model.LogStatusFailed
+		}
+
+		endedAt := time.Now()
+		database.DB.Model(taskLog).Updates(map[string]interface{}{
+			"status":   logStatus,
+			"content":  compressed,
+			"ended_at": endedAt,
+			"duration": duration,
+		})
+
+		runStatus := model.RunSuccess
+		if !success {
+			runStatus = model.RunFailed
+		}
+
+		database.DB.Model(task).Updates(map[string]interface{}{
+			"status":            model.TaskStatusEnabled,
+			"last_run_status":   runStatus,
+			"last_running_time": duration,
+			"pid":               nil,
+		})
+
+		e.processLock.Lock()
+		delete(e.runningProcesses, req.TaskID)
+		e.processLock.Unlock()
+
+		result := &ExecutionResult{
+			Success:  success,
+			ExitCode: exitCode,
+			Duration: duration,
+		}
+		e.OnTaskCompleted(req, result)
+	}()
+
+	onOutput := func(line string) {
+		fmt.Fprintf(tinyLog, "%s\n", line)
+	}
+
+	onOutput(fmt.Sprintf("=== 开始执行 [%s] ===", startTime.Format("2006-01-02 15:04:05")))
+
+	if task.TaskBefore != nil && *task.TaskBefore != "" {
+		onOutput("[执行前置脚本]")
+		RunInlineScript(*task.TaskBefore, e.scriptsDir, envVars, 60, onOutput)
+	}
+
+	RunHookScript("task_before.sh", e.scriptsDir, envVars, onOutput)
+
+	retries := 0
+	var lastExitCode int
+
+	for retries <= task.MaxRetries {
+		if retries > 0 {
+			onOutput(fmt.Sprintf("[第 %d 次重试，等待 %d 秒]", retries, task.RetryInterval))
+			time.Sleep(time.Duration(task.RetryInterval) * time.Second)
+		}
+
+		result, process, err := RunCommand(task.Command, e.scriptsDir, timeout, envVars, maxLogSize, onOutput)
+		if err != nil {
+			onOutput(fmt.Sprintf("[执行错误: %s]", err.Error()))
+			retries++
+			lastExitCode = 1
+			continue
+		}
+
+		if process != nil {
+			e.processLock.Lock()
+			e.runningProcesses[req.TaskID] = process
+			pid := process.Pid
+			e.processLock.Unlock()
+			database.DB.Model(task).Update("pid", pid)
+		}
+
+		lastExitCode = result.ReturnCode
+		if result.ReturnCode == 0 {
+			success = true
+			break
+		}
+
+		retries++
+	}
+
+	exitCode = lastExitCode
+
+	if task.TaskAfter != nil && *task.TaskAfter != "" {
+		onOutput("[执行后置脚本]")
+		RunInlineScript(*task.TaskAfter, e.scriptsDir, envVars, 60, onOutput)
+	}
+
+	RunHookScript("task_after.sh", e.scriptsDir, envVars, onOutput)
+	RunHookScript("extra.sh", e.scriptsDir, envVars, onOutput)
+
+	endTime := time.Now()
+	duration := endTime.Sub(startTime).Seconds()
+
+	onOutput(fmt.Sprintf("=== 执行结束 [%s] 耗时 %.2f 秒 退出码 %d ===",
+		endTime.Format("2006-01-02 15:04:05"), duration, lastExitCode))
+}

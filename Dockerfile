@@ -1,76 +1,49 @@
-# ============================================================
-# 呆呆面板 Dockerfile — 单镜像，类青龙面板部署方式
-# 容器以 root 用户运行，内含 Nginx + Gunicorn + Node.js + Python
-# ============================================================
-
-# ---- 阶段 1：前端构建 ----
 FROM node:20-alpine AS frontend-builder
 
 WORKDIR /build
-
-COPY frontend/package.json frontend/package-lock.json* ./
-RUN npm install --registry https://registry.npmmirror.com
-
-COPY frontend/ .
+COPY web/package.json web/package-lock.json ./
+RUN npm ci --registry https://registry.npmmirror.com
+COPY web/ ./
 RUN npm run build
 
 
-# ---- 阶段 2：最终镜像 ----
-FROM python:3.11-slim
+FROM golang:1.25-alpine AS backend-builder
 
-LABEL maintainer="daidai-panel"
-LABEL description="呆呆面板 - 定时任务管理系统"
+RUN apk add --no-cache git
 
-# 环境变量
-ENV DAIDAI_DATA_DIR=/dd/data \
-    DAIDAI_SCRIPTS_DIR=/dd/scripts \
-    DAIDAI_LOG_DIR=/dd/log \
-    DAIDAI_CONFIG_DIR=/dd/config \
-    FLASK_ENV=production \
-    PYTHONUNBUFFERED=1 \
-    TZ=Asia/Shanghai
+WORKDIR /build
+COPY server/go.mod server/go.sum ./
+ENV GOPROXY=https://goproxy.cn,direct
+RUN go mod download
+COPY server/ ./
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o daidai-server .
 
-# 安装系统依赖
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git \
-    curl \
-    bash \
+
+FROM alpine:3.19
+
+RUN apk add --no-cache \
+    ca-certificates tzdata bash curl \
     nginx \
-    cron \
-    tzdata \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
-    && npm config set registry https://registry.npmmirror.com \
-    && ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
-    && echo "Asia/Shanghai" > /etc/timezone \
-    && apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/*
+    python3 py3-pip \
+    nodejs npm \
+    git openssh-client
 
-# 创建数据目录
-RUN mkdir -p /dd/data /dd/scripts /dd/log /dd/config /dd/deps
+RUN mkdir -p /app/data/scripts /app/data/logs /app/data/backups /run/nginx
 
-# 安装 Python 依赖
-WORKDIR /app/backend
-COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt \
-    && pip install --no-cache-dir psutil
+WORKDIR /app
 
-# 复制后端代码
-COPY backend/ .
+COPY --from=backend-builder /build/daidai-server .
+COPY --from=backend-builder /build/config.yaml .
+COPY --from=frontend-builder /build/dist /app/web
+COPY docker/nginx.conf /etc/nginx/http.d/default.conf
+COPY docker/entrypoint.sh /app/entrypoint.sh
 
-# 复制前端构建产物
-COPY --from=frontend-builder /build/dist /app/frontend/dist
+RUN chmod +x /app/entrypoint.sh
 
-# 复制 Nginx 配置
-COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
-RUN rm -f /etc/nginx/sites-enabled/default
+ENV TZ=Asia/Shanghai
 
-# 复制启动脚本
-COPY docker/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+EXPOSE 5700
 
-# 暴露端口（Nginx 对外 7100，与青龙保持类似）
-EXPOSE 7100
+VOLUME ["/app/data"]
 
-VOLUME ["/dd/data", "/dd/scripts", "/dd/log", "/dd/config"]
-
-ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["/app/entrypoint.sh"]

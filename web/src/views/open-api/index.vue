@@ -1,0 +1,314 @@
+<template>
+  <div>
+    <div style="display: flex; justify-content: space-between; margin-bottom: 16px">
+      <h3 style="margin: 0">Open API 管理</h3>
+      <el-button type="primary" @click="showCreateDialog">创建应用</el-button>
+    </div>
+
+    <el-table :data="apps" v-loading="loading" border>
+      <el-table-column prop="name" label="应用名称" min-width="120" />
+      <el-table-column label="App Key" min-width="260">
+        <template #default="{ row }">
+          <div style="display: flex; align-items: center; gap: 6px">
+            <code style="font-size: 12px; word-break: break-all">{{ row.app_key }}</code>
+            <el-button type="primary" link size="small" @click="copyText(row.app_key)">
+              <el-icon><DocumentCopy /></el-icon>
+            </el-button>
+          </div>
+        </template>
+      </el-table-column>
+      <el-table-column label="App Secret" min-width="260">
+        <template #default="{ row }">
+          <div style="display: flex; align-items: center; gap: 6px">
+            <template v-if="revealedSecrets[row.id]">
+              <code style="font-size: 12px; word-break: break-all">{{ revealedSecrets[row.id] }}</code>
+              <el-button type="primary" link size="small" @click="copyText(revealedSecrets[row.id] || '')">
+                <el-icon><DocumentCopy /></el-icon>
+              </el-button>
+              <el-button type="info" link size="small" @click="delete revealedSecrets[row.id]">
+                <el-icon><Hide /></el-icon>
+              </el-button>
+            </template>
+            <template v-else>
+              <span style="color: var(--el-text-color-placeholder); letter-spacing: 2px">••••••••••••••••</span>
+              <el-button type="primary" link size="small" @click="viewSecret(row)">
+                <el-icon><View /></el-icon>查看
+              </el-button>
+            </template>
+          </div>
+        </template>
+      </el-table-column>
+      <el-table-column label="权限范围" min-width="180">
+        <template #default="{ row }">
+          <el-tag
+            v-for="s in parseScopesTags(row.scopes)"
+            :key="s"
+            size="small"
+            style="margin: 2px 4px 2px 0"
+          >{{ s }}</el-tag>
+          <span v-if="!row.scopes" style="color: var(--el-text-color-secondary)">全部权限</span>
+        </template>
+      </el-table-column>
+      <el-table-column prop="rate_limit" label="速率限制" width="100" align="center" />
+      <el-table-column prop="call_count" label="调用次数" width="100" align="center" />
+      <el-table-column label="状态" width="80" align="center">
+        <template #default="{ row }">
+          <el-switch
+            :model-value="row.enabled"
+            @change="(val: boolean) => toggleEnabled(row, val)"
+            size="small"
+          />
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" width="200" align="center">
+        <template #default="{ row }">
+          <el-button type="primary" link size="small" @click="editApp(row)">编辑</el-button>
+          <el-button type="warning" link size="small" @click="resetSecret(row)">重置密钥</el-button>
+          <el-button type="info" link size="small" @click="showLogs(row)">日志</el-button>
+          <el-button type="danger" link size="small" @click="deleteApp(row)">删除</el-button>
+        </template>
+      </el-table-column>
+    </el-table>
+
+    <el-dialog v-model="dialogVisible" :title="editingApp ? '编辑应用' : '新建应用'" width="500px">
+      <el-form :model="form" label-position="top">
+        <el-form-item label="应用名称" required>
+          <el-input v-model="form.name" placeholder="例如：外部调度系统" />
+        </el-form-item>
+        <el-form-item label="权限范围">
+          <el-select
+            v-model="form.scopesList"
+            multiple
+            filterable
+            placeholder="留空表示全部权限"
+            style="width: 100%"
+          >
+            <el-option v-for="s in scopeOptions" :key="s.value" :label="s.label" :value="s.value" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="速率限制">
+          <el-input-number v-model="form.rate_limit" :min="1" :max="10000" />
+          <span style="margin-left: 8px; color: var(--el-text-color-secondary)">次/小时</span>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="dialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="submitForm">确定</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="secretDialogVisible" title="应用密钥" width="520px" :close-on-click-modal="false">
+      <el-alert type="warning" :closable="false" style="margin-bottom: 16px">
+        请妥善保管密钥，关闭后需要验证密码才能再次查看 App Secret。
+      </el-alert>
+      <el-descriptions :column="1" border>
+        <el-descriptions-item label="App Key">
+          <div style="display: flex; align-items: center; gap: 8px">
+            <code>{{ secretData.app_key }}</code>
+            <el-button type="primary" link size="small" @click="copyText(secretData.app_key)">
+              <el-icon><DocumentCopy /></el-icon>
+            </el-button>
+          </div>
+        </el-descriptions-item>
+        <el-descriptions-item label="App Secret">
+          <div style="display: flex; align-items: center; gap: 8px">
+            <code>{{ secretData.app_secret }}</code>
+            <el-button type="primary" link size="small" @click="copyText(secretData.app_secret)">
+              <el-icon><DocumentCopy /></el-icon>
+            </el-button>
+          </div>
+        </el-descriptions-item>
+      </el-descriptions>
+    </el-dialog>
+
+    <el-dialog v-model="logsDialogVisible" title="调用日志" width="700px">
+      <el-table :data="callLogs" size="small" max-height="400">
+        <el-table-column prop="endpoint" label="接口" min-width="200" show-overflow-tooltip />
+        <el-table-column prop="method" label="方法" width="80" />
+        <el-table-column prop="status" label="状态码" width="80" align="center" />
+        <el-table-column prop="duration" label="耗时(ms)" width="90" align="center" />
+        <el-table-column prop="ip" label="IP" width="140" />
+        <el-table-column prop="created_at" label="时间" width="170">
+          <template #default="{ row }">
+            {{ new Date(row.created_at).toLocaleString('zh-CN') }}
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-pagination
+        v-if="logTotal > 20"
+        style="margin-top: 12px; justify-content: flex-end"
+        layout="total, prev, pager, next"
+        :total="logTotal"
+        :page-size="20"
+        v-model:current-page="logPage"
+        @current-change="loadLogs"
+      />
+    </el-dialog>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, reactive, onMounted } from 'vue'
+import { openApiApi } from '@/api/open-api'
+import { ElMessage, ElMessageBox } from 'element-plus'
+
+const apps = ref<any[]>([])
+const loading = ref(false)
+const dialogVisible = ref(false)
+const secretDialogVisible = ref(false)
+const logsDialogVisible = ref(false)
+const editingApp = ref<any>(null)
+const secretData = ref<any>({})
+const callLogs = ref<any[]>([])
+const logTotal = ref(0)
+const logPage = ref(1)
+const currentLogAppId = ref(0)
+const revealedSecrets = reactive<Record<number, string>>({})
+
+const form = ref({ name: '', scopesList: [] as string[], rate_limit: 100 })
+
+const scopeOptions = [
+  { label: '任务管理', value: 'tasks' },
+  { label: '脚本管理', value: 'scripts' },
+  { label: '环境变量', value: 'envs' },
+  { label: '日志查看', value: 'logs' },
+  { label: '系统信息', value: 'system' },
+]
+
+const scopeLabelMap: Record<string, string> = Object.fromEntries(scopeOptions.map(s => [s.value, s.label]))
+
+const parseScopesTags = (scopes: string): string[] => {
+  if (!scopes) return []
+  return scopes.split(',').map(s => s.trim()).filter(Boolean).map(s => scopeLabelMap[s] || s)
+}
+
+const scopesToString = (list: string[]): string => list.join(',')
+
+const stringToScopes = (str: string): string[] => {
+  if (!str) return []
+  return str.split(',').map(s => s.trim()).filter(Boolean)
+}
+
+const copyText = (text: string) => {
+  if (!text) return
+  navigator.clipboard.writeText(text).then(() => ElMessage.success('已复制'))
+}
+
+const loadApps = async () => {
+  loading.value = true
+  try {
+    const res = await openApiApi.list()
+    apps.value = (res as any).data || []
+  } catch {} finally {
+    loading.value = false
+  }
+}
+
+const showCreateDialog = () => {
+  editingApp.value = null
+  form.value = { name: '', scopesList: [], rate_limit: 100 }
+  dialogVisible.value = true
+}
+
+const editApp = (app: any) => {
+  editingApp.value = app
+  form.value = { name: app.name, scopesList: stringToScopes(app.scopes || ''), rate_limit: app.rate_limit || 100 }
+  dialogVisible.value = true
+}
+
+const submitForm = async () => {
+  if (!form.value.name) {
+    ElMessage.warning('请输入应用名称')
+    return
+  }
+  const payload = {
+    name: form.value.name,
+    scopes: scopesToString(form.value.scopesList),
+    rate_limit: form.value.rate_limit,
+  }
+  try {
+    if (editingApp.value) {
+      await openApiApi.update(editingApp.value.id, payload)
+      ElMessage.success('更新成功')
+    } else {
+      const res = await openApiApi.create(payload)
+      secretData.value = (res as any).data || {}
+      secretDialogVisible.value = true
+      ElMessage.success('创建成功')
+    }
+    dialogVisible.value = false
+    loadApps()
+  } catch {
+    ElMessage.error('操作失败')
+  }
+}
+
+const viewSecret = async (app: any) => {
+  try {
+    const { value: password } = await ElMessageBox.prompt('请输入登录密码以查看 App Secret', '身份验证', {
+      inputType: 'password',
+      inputPlaceholder: '请输入密码',
+      confirmButtonText: '确认',
+      cancelButtonText: '取消',
+    })
+    if (!password) return
+    const res = await openApiApi.viewSecret(app.id, password) as any
+    revealedSecrets[app.id] = res.data?.app_secret || ''
+  } catch (e: any) {
+    if (e === 'cancel' || e?.toString() === 'cancel') return
+    ElMessage.error(e?.response?.data?.error || '验证失败')
+  }
+}
+
+const toggleEnabled = async (app: any, val: boolean) => {
+  try {
+    if (val) {
+      await openApiApi.enable(app.id)
+    } else {
+      await openApiApi.disable(app.id)
+    }
+    app.enabled = val
+  } catch {
+    ElMessage.error('操作失败')
+  }
+}
+
+const resetSecret = async (app: any) => {
+  try {
+    await ElMessageBox.confirm('确认重置密钥？旧密钥将立即失效。', '警告', { type: 'warning' })
+    const res = await openApiApi.resetSecret(app.id)
+    secretData.value = (res as any).data || {}
+    secretDialogVisible.value = true
+    delete revealedSecrets[app.id]
+  } catch {}
+}
+
+const deleteApp = async (app: any) => {
+  try {
+    await ElMessageBox.confirm(`确认删除应用 "${app.name}"？`, '提示', { type: 'warning' })
+    await openApiApi.delete(app.id)
+    ElMessage.success('删除成功')
+    loadApps()
+  } catch {}
+}
+
+const showLogs = (app: any) => {
+  currentLogAppId.value = app.id
+  logPage.value = 1
+  logsDialogVisible.value = true
+  loadLogs()
+}
+
+const loadLogs = async () => {
+  try {
+    const res = await openApiApi.callLogs(currentLogAppId.value, {
+      page: logPage.value,
+      page_size: 20,
+    })
+    callLogs.value = (res as any).data || []
+    logTotal.value = (res as any).total || 0
+  } catch {}
+}
+
+onMounted(loadApps)
+</script>

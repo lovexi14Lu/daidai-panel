@@ -1,0 +1,321 @@
+package handler
+
+import (
+	"fmt"
+	"strconv"
+	"time"
+
+	"daidai-panel/database"
+	"daidai-panel/middleware"
+	"daidai-panel/model"
+	"daidai-panel/pkg/response"
+	"daidai-panel/service"
+
+	"github.com/gin-gonic/gin"
+)
+
+type SecurityHandler struct{}
+
+func NewSecurityHandler() *SecurityHandler {
+	return &SecurityHandler{}
+}
+
+func (h *SecurityHandler) LoginLogs(c *gin.Context) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	username := c.Query("username")
+
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+
+	query := database.DB.Model(&model.LoginLog{})
+	if username != "" {
+		query = query.Where("username = ?", username)
+	}
+
+	var total int64
+	query.Count(&total)
+
+	var logs []model.LoginLog
+	query.Order("created_at DESC").
+		Offset((page - 1) * pageSize).Limit(pageSize).Find(&logs)
+
+	data := make([]map[string]interface{}, len(logs))
+	for i, l := range logs {
+		data[i] = l.ToDict()
+	}
+
+	response.Paginated(c, data, total, page, pageSize)
+}
+
+func (h *SecurityHandler) Sessions(c *gin.Context) {
+	service.CleanExpiredSessions()
+
+	var sessions []model.UserSession
+	database.DB.Where("expires_at > ?", time.Now()).
+		Order("created_at DESC").Find(&sessions)
+
+	data := make([]map[string]interface{}, len(sessions))
+	for i, s := range sessions {
+		data[i] = s.ToDict()
+	}
+
+	response.Success(c, gin.H{"data": data})
+}
+
+func (h *SecurityHandler) RevokeSession(c *gin.Context) {
+	sessionID, _ := strconv.ParseUint(c.Param("id"), 10, 32)
+
+	var session model.UserSession
+	if err := database.DB.First(&session, sessionID).Error; err != nil {
+		response.NotFound(c, "会话不存在")
+		return
+	}
+
+	blocklist := model.TokenBlocklist{
+		JTI:       session.JTI,
+		TokenType: "access",
+		UserID:    &session.UserID,
+		RevokedAt: time.Now(),
+		ExpiresAt: session.ExpiresAt,
+	}
+	database.DB.Create(&blocklist)
+
+	database.DB.Delete(&session)
+	response.Success(c, gin.H{"message": "会话已撤销"})
+}
+
+func (h *SecurityHandler) RevokeAllSessions(c *gin.Context) {
+	userID, _ := strconv.ParseUint(c.Param("user_id"), 10, 32)
+
+	var sessions []model.UserSession
+	database.DB.Where("user_id = ?", userID).Find(&sessions)
+
+	for _, s := range sessions {
+		blocklist := model.TokenBlocklist{
+			JTI:       s.JTI,
+			TokenType: "access",
+			UserID:    &s.UserID,
+			RevokedAt: time.Now(),
+			ExpiresAt: s.ExpiresAt,
+		}
+		database.DB.Create(&blocklist)
+	}
+
+	count := service.RevokeAllUserSessions(uint(userID))
+	response.Success(c, gin.H{"message": fmt.Sprintf("已撤销 %d 个会话", count)})
+}
+
+func (h *SecurityHandler) RevokeOtherSessions(c *gin.Context) {
+	username, _ := c.Get("username")
+	currentJTI, _ := c.Get("jti")
+
+	var user model.User
+	if err := database.DB.Where("username = ?", username).First(&user).Error; err != nil {
+		response.NotFound(c, "用户不存在")
+		return
+	}
+
+	var sessions []model.UserSession
+	database.DB.Where("user_id = ? AND jti != ?", user.ID, currentJTI).Find(&sessions)
+
+	for _, s := range sessions {
+		blocklist := model.TokenBlocklist{
+			JTI:       s.JTI,
+			TokenType: "access",
+			UserID:    &s.UserID,
+			RevokedAt: time.Now(),
+			ExpiresAt: s.ExpiresAt,
+		}
+		database.DB.Create(&blocklist)
+	}
+
+	database.DB.Where("user_id = ? AND jti != ?", user.ID, currentJTI).Delete(&model.UserSession{})
+	response.Success(c, gin.H{"message": fmt.Sprintf("已撤销 %d 个其他会话", len(sessions))})
+}
+
+func (h *SecurityHandler) IPWhitelist(c *gin.Context) {
+	var whitelist []model.IPWhitelist
+	database.DB.Order("created_at DESC").Find(&whitelist)
+
+	data := make([]map[string]interface{}, len(whitelist))
+	for i, w := range whitelist {
+		data[i] = w.ToDict()
+	}
+
+	response.Success(c, gin.H{"data": data})
+}
+
+func (h *SecurityHandler) AddIPWhitelist(c *gin.Context) {
+	var req struct {
+		IP      string `json:"ip" binding:"required"`
+		Remarks string `json:"remarks"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "请求参数错误")
+		return
+	}
+
+	entry := model.IPWhitelist{
+		IP:      req.IP,
+		Remarks: req.Remarks,
+	}
+
+	if err := database.DB.Create(&entry).Error; err != nil {
+		response.BadRequest(c, "IP 已在白名单中")
+		return
+	}
+
+	response.Created(c, gin.H{"message": "添加成功", "data": entry.ToDict()})
+}
+
+func (h *SecurityHandler) RemoveIPWhitelist(c *gin.Context) {
+	entryID, _ := strconv.ParseUint(c.Param("id"), 10, 32)
+	database.DB.Where("id = ?", entryID).Delete(&model.IPWhitelist{})
+	response.Success(c, gin.H{"message": "删除成功"})
+}
+
+func (h *SecurityHandler) AuditLogs(c *gin.Context) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	action := c.Query("action")
+
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+
+	query := database.DB.Model(&model.SecurityAudit{})
+	if action != "" {
+		query = query.Where("action = ?", action)
+	}
+
+	var total int64
+	query.Count(&total)
+
+	var audits []model.SecurityAudit
+	query.Order("created_at DESC").
+		Offset((page - 1) * pageSize).Limit(pageSize).Find(&audits)
+
+	data := make([]map[string]interface{}, len(audits))
+	for i, a := range audits {
+		data[i] = a.ToDict()
+	}
+
+	response.Paginated(c, data, total, page, pageSize)
+}
+
+func (h *SecurityHandler) LoginStats(c *gin.Context) {
+	days, _ := strconv.Atoi(c.DefaultQuery("days", "7"))
+	if days < 1 || days > 90 {
+		days = 7
+	}
+
+	stats := service.GetLoginStats(days)
+	response.Success(c, gin.H{"data": stats})
+}
+
+func (h *SecurityHandler) ClearLoginLogs(c *gin.Context) {
+	result := database.DB.Where("1 = 1").Delete(&model.LoginLog{})
+	response.Success(c, gin.H{
+		"message": fmt.Sprintf("已清除 %d 条登录日志", result.RowsAffected),
+	})
+}
+
+func (h *SecurityHandler) Setup2FA(c *gin.Context) {
+	username := c.GetString("username")
+	var user model.User
+	if err := database.DB.Where("username = ?", username).First(&user).Error; err != nil {
+		response.NotFound(c, "用户不存在")
+		return
+	}
+
+	secret, uri, err := service.SetupTwoFactor(user.ID)
+	if err != nil {
+		response.InternalError(c, "设置 2FA 失败")
+		return
+	}
+
+	response.Success(c, gin.H{
+		"data": gin.H{
+			"secret": secret,
+			"uri":    uri,
+		},
+	})
+}
+
+func (h *SecurityHandler) Verify2FA(c *gin.Context) {
+	username := c.GetString("username")
+	var user model.User
+	if err := database.DB.Where("username = ?", username).First(&user).Error; err != nil {
+		response.NotFound(c, "用户不存在")
+		return
+	}
+
+	var req struct {
+		Code string `json:"code" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "请求参数错误")
+		return
+	}
+
+	if err := service.VerifyAndEnableTwoFactor(user.ID, req.Code); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
+	response.Success(c, gin.H{"message": "2FA 已启用"})
+}
+
+func (h *SecurityHandler) Disable2FA(c *gin.Context) {
+	username := c.GetString("username")
+	var user model.User
+	if err := database.DB.Where("username = ?", username).First(&user).Error; err != nil {
+		response.NotFound(c, "用户不存在")
+		return
+	}
+
+	service.DisableTwoFactor(user.ID)
+	response.Success(c, gin.H{"message": "2FA 已禁用"})
+}
+
+func (h *SecurityHandler) Get2FAStatus(c *gin.Context) {
+	username := c.GetString("username")
+	var user model.User
+	if err := database.DB.Where("username = ?", username).First(&user).Error; err != nil {
+		response.NotFound(c, "用户不存在")
+		return
+	}
+
+	enabled := service.IsTwoFactorEnabled(user.ID)
+	response.Success(c, gin.H{"data": gin.H{"enabled": enabled}})
+}
+
+func (h *SecurityHandler) RegisterRoutes(r *gin.RouterGroup) {
+	security := r.Group("/security", middleware.JWTAuth())
+	{
+		security.GET("/login-logs", middleware.RequireAdmin(), h.LoginLogs)
+		security.DELETE("/login-logs", middleware.RequireAdmin(), h.ClearLoginLogs)
+		security.GET("/sessions", middleware.RequireAdmin(), h.Sessions)
+		security.DELETE("/sessions/others", middleware.RequireAdmin(), h.RevokeOtherSessions)
+		security.DELETE("/sessions/:id", middleware.RequireAdmin(), h.RevokeSession)
+		security.DELETE("/sessions/user/:user_id", middleware.RequireAdmin(), h.RevokeAllSessions)
+		security.GET("/ip-whitelist", middleware.RequireAdmin(), h.IPWhitelist)
+		security.POST("/ip-whitelist", middleware.RequireAdmin(), h.AddIPWhitelist)
+		security.DELETE("/ip-whitelist/:id", middleware.RequireAdmin(), h.RemoveIPWhitelist)
+		security.GET("/audit-logs", middleware.RequireAdmin(), h.AuditLogs)
+		security.GET("/login-stats", middleware.RequireAdmin(), h.LoginStats)
+
+		security.POST("/2fa/setup", h.Setup2FA)
+		security.POST("/2fa/verify", h.Verify2FA)
+		security.DELETE("/2fa", h.Disable2FA)
+		security.GET("/2fa/status", h.Get2FAStatus)
+	}
+}
