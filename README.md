@@ -120,7 +120,7 @@ services:
       - "5700:5700"
     volumes:
       - ./Dumb-Panel:/app/Dumb-Panel
-      - /var/run/docker.sock:/var/run/docker.sock  # 支持面板内一键更新
+      - /var/run/docker.sock:/var/run/docker.sock  
     environment:
       - TZ=Asia/Shanghai
       - CONTAINER_NAME=daidai-panel
@@ -153,9 +153,75 @@ docker run -d \
 
 > **说明**：挂载 `/var/run/docker.sock` 是为了支持面板内一键更新功能。如果不需要此功能，可以移除该挂载。
 
-### 自定义端口
+### 本地开发运行
 
-默认面板端口为 5700。如需修改宿主机访问端口，只需更改 `-p` 左侧的端口号即可：
+#### 环境要求
+
+- Go 1.25+
+- Node.js 18+（推荐 20+）
+- npm 或 pnpm
+
+#### 启动后端
+
+```bash
+cd server
+go run .
+```
+
+后端默认监听 `5701` 端口，读取同目录下的 `config.yaml` 作为配置文件。
+
+#### 启动前端
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+前端 Vite 开发服务器默认运行在 `5173` 端口，已配置将 `/api` 请求代理到 `http://localhost:5701`。
+
+启动后访问：`http://localhost:5173`
+
+#### 本地端口修改
+
+**修改后端端口**：编辑 `server/config.yaml`
+
+```yaml
+server:
+  port: 5701    # 改为你想要的端口
+```
+
+修改后端端口后，需要同步修改前端代理地址。编辑 `web/vite.config.ts`：
+
+```typescript
+server: {
+  port: 5173,   // 前端端口，按需修改
+  proxy: {
+    '/api': {
+      target: 'http://localhost:5701',  // 改为对应的后端端口
+      changeOrigin: true
+    }
+  }
+}
+```
+
+#### 构建生产版本
+
+```bash
+# 构建前端
+cd web
+npm run build
+
+# 构建后端
+cd server
+go build -o daidai-panel .
+```
+
+前端构建产物在 `web/dist/`，需配合 Nginx 或其他静态服务器部署，并反向代理 `/api` 到后端。
+
+### 自定义端口（Docker）
+
+Docker 部署时默认面板端口为 5700。如需修改宿主机访问端口，只需更改 `-p` 左侧的端口号即可：
 
 ```bash
 # 示例：通过宿主机 8080 端口访问面板
@@ -234,6 +300,37 @@ docker compose up -d
 | `PANEL_PORT` | 面板访问端口（容器内 Nginx 监听端口） | `5700` |
 
 <details>
+<summary><b>config.yaml 完整配置说明</b></summary>
+
+本地开发时后端读取 `server/config.yaml`，Docker 部署时由 `entrypoint.sh` 自动生成。
+
+```yaml
+server:
+  port: 5701          # 后端 API 端口
+  mode: release       # debug / release
+
+database:
+  path: ./data/daidai.db    # SQLite 数据库路径
+
+jwt:
+  secret: ""                # 留空则自动生成并持久化
+  access_token_expire: 480h
+  refresh_token_expire: 1440h
+
+data:
+  dir: ./data               # 数据根目录
+  scripts_dir: ./data/scripts
+  log_dir: ./data/logs
+
+cors:
+  origins:                  # 允许的跨域来源
+    - http://localhost:5173
+    - http://localhost:5700
+```
+
+</details>
+
+<details>
 <summary><b>Nginx 反向代理配置（HTTPS）</b></summary>
 
 ```nginx
@@ -267,6 +364,15 @@ server {
 ```
 
 </details>
+
+## 致谢
+
+本项目的开发离不开以下优秀的开源项目：
+
+- **[白虎面板 (Baihu Panel)](https://github.com/engigu/baihu-panel)** — 后端框架架构参考，部分代码基于白虎面板改进
+- **[青龙面板 (Qinglong)](https://github.com/whyour/qinglong)** — 功能设计参考，定时任务管理、环境变量、订阅管理等核心功能借鉴自青龙面板
+
+感谢以上项目作者的贡献！
 
 ## LICENSE
 

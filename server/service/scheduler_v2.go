@@ -216,7 +216,7 @@ func (s *SchedulerV2) AddJob(task *model.Task) error {
 
 	cronExpr := toCronV3(task.CronExpression)
 	if cronExpr == "" {
-		return fmt.Errorf("invalid cron expression for task %d: %s", task.ID, task.CronExpression)
+		return nil
 	}
 
 	taskID := task.ID

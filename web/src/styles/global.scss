@@ -227,3 +227,66 @@ html.dark {
     }
   }
 }
+
+.el-popper.is-dark {
+  max-width: 400px;
+  word-break: break-all;
+  line-height: 1.6;
+}
+
+@media screen and (max-width: 768px) {
+  .el-dialog {
+    --el-dialog-width: 92vw !important;
+    width: 92vw !important;
+    margin: 8vh auto !important;
+
+    .el-dialog__body {
+      padding: 16px;
+    }
+
+    .el-dialog__header {
+      padding: 14px 16px 10px;
+    }
+
+    .el-dialog__footer {
+      padding: 10px 16px 14px;
+    }
+  }
+
+  .el-message-box {
+    width: 88vw !important;
+  }
+
+  .el-table {
+    font-size: 12px;
+
+    th.el-table__cell,
+    td.el-table__cell {
+      padding: 6px 0;
+      font-size: 12px;
+    }
+  }
+
+  .el-form-item {
+    margin-bottom: 14px;
+
+    .el-form-item__label {
+      font-size: 13px;
+    }
+  }
+
+  .el-pagination {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 4px;
+
+    .el-pagination__sizes,
+    .el-pagination__jump {
+      display: none;
+    }
+  }
+
+  .el-drawer {
+    width: 100% !important;
+  }
+}

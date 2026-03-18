@@ -304,12 +304,11 @@ func (h *ScriptHandler) SaveContent(c *gin.Context) {
 }
 
 func (h *ScriptHandler) Upload(c *gin.Context) {
-	file, header, err := c.Request.FormFile("file")
+	header, err := c.FormFile("file")
 	if err != nil {
 		response.BadRequest(c, "未选择文件")
 		return
 	}
-	defer file.Close()
 
 	if header.Size > maxUploadSize {
 		response.BadRequest(c, "文件过大（最大 10MB）")
@@ -336,14 +335,10 @@ func (h *ScriptHandler) Upload(c *gin.Context) {
 	}
 
 	os.MkdirAll(filepath.Dir(full), 0755)
-	dst, err := os.Create(full)
-	if err != nil {
-		response.InternalError(c, "创建文件失败")
+	if err := c.SaveUploadedFile(header, full); err != nil {
+		response.InternalError(c, "保存文件失败")
 		return
 	}
-	defer dst.Close()
-
-	io.Copy(dst, file)
 
 	response.Created(c, gin.H{"message": "上传成功", "path": targetPath})
 }

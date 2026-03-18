@@ -58,6 +58,7 @@ const debugLogs = ref<string[]>([])
 const debugRunning = ref(false)
 const debugError = ref('')
 const debugExitCode = ref<number | null>(null)
+const debugCodeChanged = ref(false)
 const formatting = ref(false)
 let debugTimer: ReturnType<typeof setInterval> | null = null
 
@@ -403,11 +404,22 @@ async function handleDebugRun() {
   debugError.value = ''
   debugExitCode.value = null
   debugRunId.value = ''
+  debugCodeChanged.value = false
   showDebugDialog.value = true
 }
 
 async function handleDebugStart() {
   if (!selectedFile.value) return
+  if (debugCodeChanged.value) {
+    try {
+      await scriptApi.saveContent(selectedFile.value, debugCode.value)
+      fileContent.value = debugCode.value
+      debugCodeChanged.value = false
+    } catch {
+      ElMessage.error('保存代码失败')
+      return
+    }
+  }
   debugLogs.value = []
   debugError.value = ''
   debugExitCode.value = null
@@ -856,11 +868,17 @@ function getFileName(path: string) {
       <div class="debug-container">
         <div class="debug-code-panel">
           <div class="panel-header">
-            <el-icon><Document /></el-icon>
+            <el-icon><Edit /></el-icon>
             <span>{{ debugFileName }}</span>
+            <el-tag v-if="debugCodeChanged" type="warning" size="small" effect="plain">已修改</el-tag>
           </div>
-          <div class="panel-content">
-            <pre class="code-display">{{ debugCode }}</pre>
+          <div class="panel-content" style="padding: 0">
+            <MonacoEditor
+              v-model="debugCode"
+              :language="editorLanguage"
+              style="height: 100%; min-height: 400px"
+              @update:modelValue="debugCodeChanged = true"
+            />
           </div>
         </div>
         <div class="debug-log-panel">
@@ -1120,15 +1138,6 @@ function getFileName(path: string) {
 
 .debug-error {
   margin-bottom: 12px;
-}
-
-.code-display {
-  font-family: var(--dd-font-mono);
-  font-size: 13px;
-  line-height: 1.6;
-  margin: 0;
-  white-space: pre;
-  color: var(--el-text-color-primary);
 }
 
 .debug-logs {

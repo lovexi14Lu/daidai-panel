@@ -220,7 +220,6 @@ func buildEnv(envVars map[string]string) []string {
 
 	dangerousVars := map[string]bool{
 		"LD_PRELOAD": true, "LD_LIBRARY_PATH": true, "DYLD_INSERT_LIBRARIES": true,
-		"PYTHONPATH": true, "NODE_PATH": true,
 	}
 
 	for k, v := range envVars {

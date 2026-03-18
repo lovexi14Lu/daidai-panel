@@ -255,7 +255,7 @@ async function handleUpdatePanel() {
     await systemApi.updatePanel()
     loading.close()
     ElMessageBox.alert(
-      '镜像拉取已开始，容器将在拉取完成后自动重启。\n\n页面将在 10 秒后自动刷新，如未恢复请手动刷新。',
+      '镜像拉取已开始，容器将在拉取完成后自动重启。\n\n页面将在服务恢复后自动刷新，请耐心等待...',
       '更新进行中',
       {
         confirmButtonText: '知道了',
@@ -265,9 +265,24 @@ async function handleUpdatePanel() {
         closeOnPressEscape: false
       }
     )
+    let attempts = 0
+    const maxAttempts = 60
     setTimeout(() => {
-      window.location.reload()
-    }, 10000)
+      const poll = setInterval(async () => {
+        attempts++
+        try {
+          const res = await fetch('/', { method: 'HEAD' })
+          if (res.ok) {
+            clearInterval(poll)
+            window.location.reload()
+          }
+        } catch {}
+        if (attempts >= maxAttempts) {
+          clearInterval(poll)
+          ElMessage.warning('更新超时，请手动刷新页面检查')
+        }
+      }, 3000)
+    }, 8000)
   } catch (err: any) {
     loading.close()
     const msg = err?.response?.data?.error || '更新失败，请手动更新'
@@ -290,6 +305,26 @@ async function loadBackups() {
 async function handleCreateBackup() {
   showBackupDialog.value = true
   backupPassword.value = ''
+}
+
+const backupFileInput = ref<HTMLInputElement | null>(null)
+
+function triggerUploadBackup() {
+  backupFileInput.value?.click()
+}
+
+async function handleUploadBackup(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  try {
+    await systemApi.uploadBackup(file)
+    ElMessage.success('备份文件导入成功')
+    loadBackups()
+  } catch {
+    ElMessage.error('导入备份失败')
+  }
+  input.value = ''
 }
 
 async function confirmCreateBackup() {
@@ -876,9 +911,15 @@ onMounted(() => {
           <template #header>
             <div class="card-header">
               <span class="card-title"><el-icon><Clock /></el-icon> 数据备份与恢复</span>
-              <el-button type="primary" @click="handleCreateBackup">
-                <el-icon><Upload /></el-icon>创建备份
-              </el-button>
+              <div>
+                <el-button @click="triggerUploadBackup">
+                  <el-icon><Download /></el-icon>导入备份
+                </el-button>
+                <el-button type="primary" @click="handleCreateBackup">
+                  <el-icon><Upload /></el-icon>创建备份
+                </el-button>
+                <input ref="backupFileInput" type="file" accept=".json,.enc" style="display:none" @change="handleUploadBackup" />
+              </div>
             </div>
           </template>
 

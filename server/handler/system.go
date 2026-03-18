@@ -3,6 +3,7 @@ package handler
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
@@ -20,6 +21,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
 
 type SystemHandler struct{}
 
@@ -185,6 +190,36 @@ func (h *SystemHandler) DeleteBackup(c *gin.Context) {
 	response.Success(c, gin.H{"message": "删除成功"})
 }
 
+func (h *SystemHandler) UploadBackup(c *gin.Context) {
+	file, err := c.FormFile("file")
+	if err != nil {
+		response.BadRequest(c, "请选择备份文件")
+		return
+	}
+
+	if file.Size > 100*1024*1024 {
+		response.BadRequest(c, "文件过大，最大 100MB")
+		return
+	}
+
+	filename := filepath.Base(file.Filename)
+	if !strings.HasSuffix(filename, ".json") && !strings.HasSuffix(filename, ".enc") {
+		response.BadRequest(c, "仅支持 .json 或 .enc 备份文件")
+		return
+	}
+
+	backupDir := filepath.Join(config.C.Data.Dir, "backups")
+	os.MkdirAll(backupDir, 0755)
+	dst := filepath.Join(backupDir, filename)
+
+	if err := c.SaveUploadedFile(file, dst); err != nil {
+		response.InternalError(c, "保存文件失败")
+		return
+	}
+
+	response.Success(c, gin.H{"message": "上传成功", "data": gin.H{"filename": filename}})
+}
+
 func (h *SystemHandler) DownloadBackup(c *gin.Context) {
 	filename := c.Param("filename")
 	if filename == "" {
@@ -319,33 +354,64 @@ func (h *SystemHandler) UpdatePanel(c *gin.Context) {
 			return
 		}
 
-		exec.Command("docker", "stop", containerName).Run()
-		exec.Command("docker", "rm", containerName).Run()
-
-		args := []string{"run", "-d", "--name", containerName}
+		runArgs := []string{"run", "-d", "--name", containerName}
 
 		if containerInfo.HostConfig.RestartPolicy.Name != "" {
-			args = append(args, "--restart", containerInfo.HostConfig.RestartPolicy.Name)
+			runArgs = append(runArgs, "--restart", containerInfo.HostConfig.RestartPolicy.Name)
+		}
+
+		networkMode := containerInfo.HostConfig.NetworkMode
+		if networkMode != "" && networkMode != "default" {
+			runArgs = append(runArgs, "--network", networkMode)
 		}
 
 		for port, bindings := range containerInfo.HostConfig.PortBindings {
 			for _, b := range bindings {
 				if b.HostPort != "" {
-					args = append(args, "-p", b.HostPort+":"+strings.Split(port, "/")[0])
+					mapping := b.HostPort + ":" + strings.Split(port, "/")[0]
+					if b.HostIP != "" && b.HostIP != "0.0.0.0" {
+						mapping = b.HostIP + ":" + mapping
+					}
+					runArgs = append(runArgs, "-p", mapping)
 				}
 			}
 		}
 
 		for _, bind := range containerInfo.HostConfig.Binds {
-			args = append(args, "-v", bind)
+			runArgs = append(runArgs, "-v", bind)
 		}
 
+		skipEnvPrefixes := []string{"PATH=", "HOME=", "HOSTNAME=", "LANG=", "LC_", "TERM="}
 		for _, env := range containerInfo.Config.Env {
-			args = append(args, "-e", env)
+			skip := false
+			for _, prefix := range skipEnvPrefixes {
+				if strings.HasPrefix(env, prefix) {
+					skip = true
+					break
+				}
+			}
+			if !skip {
+				runArgs = append(runArgs, "-e", env)
+			}
 		}
 
-		args = append(args, imageName)
-		exec.Command("docker", args...).Run()
+		runArgs = append(runArgs, imageName)
+
+		var cmdParts []string
+		for _, arg := range runArgs {
+			cmdParts = append(cmdParts, shellQuote(arg))
+		}
+		script := fmt.Sprintf(
+			"sleep 2 && docker stop %s && docker rm %s && docker %s",
+			shellQuote(containerName),
+			shellQuote(containerName),
+			strings.Join(cmdParts, " "),
+		)
+
+		exec.Command("docker", "run", "-d", "--rm",
+			"-v", "/var/run/docker.sock:/var/run/docker.sock",
+			"docker:cli", "sh", "-c", script,
+		).Run()
 	}()
 
 	response.Success(c, gin.H{
@@ -408,6 +474,7 @@ func (h *SystemHandler) RegisterRoutes(r *gin.RouterGroup) {
 		sys.POST("/update", middleware.RequireAdmin(), h.UpdatePanel)
 		sys.GET("/panel-log", h.PanelLog)
 		sys.POST("/backup", middleware.RequireAdmin(), h.Backup)
+		sys.POST("/backup/upload", middleware.RequireAdmin(), h.UploadBackup)
 		sys.GET("/backups", middleware.RequireAdmin(), h.BackupList)
 		sys.GET("/backup/download/:filename", middleware.RequireAdmin(), h.DownloadBackup)
 		sys.POST("/restore", middleware.RequireAdmin(), h.Restore)

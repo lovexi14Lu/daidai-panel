@@ -89,18 +89,12 @@ func (h *TaskHandler) Create(c *gin.Context) {
 		return
 	}
 
-	result := cron.Parse(req.CronExpression)
-	if !result.Valid {
-		response.BadRequest(c, "无效的 cron 表达式: "+result.Error)
-		return
-	}
-
 	task := model.Task{
 		Name:           req.Name,
 		Command:        req.Command,
 		CronExpression: req.CronExpression,
 		Status:         model.TaskStatusEnabled,
-		Timeout:        300,
+		Timeout:        86400,
 		RetryInterval:  60,
 		NotifyOnFailure: true,
 	}
@@ -159,14 +153,6 @@ func (h *TaskHandler) Update(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "请求参数错误")
 		return
-	}
-
-	if expr, ok := req["cron_expression"].(string); ok {
-		result := cron.Parse(expr)
-		if !result.Valid {
-			response.BadRequest(c, "无效的 cron 表达式: "+result.Error)
-			return
-		}
 	}
 
 	if labels, ok := req["labels"].([]interface{}); ok {
@@ -252,16 +238,34 @@ func (h *TaskHandler) Stop(c *gin.Context) {
 
 	stopped := service.GetTaskExecutor().StopTask(uint(taskID))
 
+	if !stopped {
+		if s := service.GetScheduler(); s != nil {
+			stopped = s.StopRunningTask(uint(taskID))
+		}
+	}
+
+	if task.PID != nil && *task.PID > 0 {
+		service.KillProcessByPid(*task.PID)
+	}
+
 	database.DB.Model(&task).Updates(map[string]interface{}{
-		"status": model.TaskStatusEnabled,
-		"pid":    nil,
+		"status":   model.TaskStatusEnabled,
+		"pid":      nil,
+		"log_path": nil,
 	})
 
-	if stopped {
-		response.Success(c, gin.H{"message": "任务已停止"})
-	} else {
-		response.Success(c, gin.H{"message": "任务已停止"})
+	var runningLog model.TaskLog
+	if err := database.DB.Where("task_id = ? AND status = ?", taskID, model.LogStatusRunning).
+		Order("started_at DESC").First(&runningLog).Error; err == nil {
+		failedStatus := model.LogStatusFailed
+		now := time.Now()
+		database.DB.Model(&runningLog).Updates(map[string]interface{}{
+			"status":   failedStatus,
+			"ended_at": now,
+		})
 	}
+
+	response.Success(c, gin.H{"message": "任务已停止"})
 }
 
 func (h *TaskHandler) Enable(c *gin.Context) {
@@ -644,7 +648,7 @@ func (h *TaskHandler) Import(c *gin.Context) {
 			Command:         command,
 			CronExpression:  cronExpr,
 			Status:          model.TaskStatusDisabled,
-			Timeout:         300,
+			Timeout:         86400,
 			RetryInterval:   60,
 			NotifyOnFailure: true,
 		}

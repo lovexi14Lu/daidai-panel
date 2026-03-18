@@ -5,6 +5,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,6 +19,11 @@ import (
 	"daidai-panel/model"
 )
 
+type ScriptFile struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
 type BackupData struct {
 	Version   string    `json:"version"`
 	CreatedAt time.Time `json:"created_at"`
@@ -27,11 +33,58 @@ type BackupData struct {
 	Channels  []model.NotifyChannel `json:"notify_channels"`
 	SSHKeys   []model.SSHKey       `json:"ssh_keys"`
 	Configs   []model.SystemConfig `json:"system_configs"`
+	Scripts   []ScriptFile         `json:"scripts,omitempty"`
+	Deps      []model.Dependency   `json:"dependencies,omitempty"`
+}
+
+func collectScripts(scriptsDir string) []ScriptFile {
+	var files []ScriptFile
+	allowedExts := map[string]bool{".js": true, ".py": true, ".ts": true, ".sh": true}
+
+	filepath.Walk(scriptsDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(info.Name()))
+		if !allowedExts[ext] {
+			return nil
+		}
+		if info.Size() > 10*1024*1024 {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		rel, _ := filepath.Rel(scriptsDir, path)
+		rel = filepath.ToSlash(rel)
+		files = append(files, ScriptFile{
+			Path:    rel,
+			Content: base64.StdEncoding.EncodeToString(data),
+		})
+		return nil
+	})
+	return files
+}
+
+func restoreScripts(scriptsDir string, scripts []ScriptFile) {
+	for _, sf := range scripts {
+		if strings.Contains(sf.Path, "..") {
+			continue
+		}
+		data, err := base64.StdEncoding.DecodeString(sf.Content)
+		if err != nil {
+			continue
+		}
+		fullPath := filepath.Join(scriptsDir, filepath.FromSlash(sf.Path))
+		os.MkdirAll(filepath.Dir(fullPath), 0755)
+		os.WriteFile(fullPath, data, 0755)
+	}
 }
 
 func CreateBackup(password string) (string, error) {
 	var data BackupData
-	data.Version = "0.2.0"
+	data.Version = "0.3.0"
 	data.CreatedAt = time.Now()
 
 	database.DB.Find(&data.Tasks)
@@ -40,6 +93,8 @@ func CreateBackup(password string) (string, error) {
 	database.DB.Find(&data.Channels)
 	database.DB.Find(&data.SSHKeys)
 	database.DB.Find(&data.Configs)
+	database.DB.Find(&data.Deps)
+	data.Scripts = collectScripts(config.C.Data.ScriptsDir)
 
 	jsonData, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
@@ -150,6 +205,7 @@ func RestoreBackup(filename, password string) error {
 	tx.Where("1 = 1").Delete(&model.NotifyChannel{})
 	tx.Where("1 = 1").Delete(&model.SSHKey{})
 	tx.Where("1 = 1").Delete(&model.SystemConfig{})
+	tx.Where("1 = 1").Delete(&model.Dependency{})
 
 	for _, item := range backup.Tasks {
 		item.ID = 0
@@ -175,9 +231,17 @@ func RestoreBackup(filename, password string) error {
 		item.ID = 0
 		tx.Create(&item)
 	}
+	for _, item := range backup.Deps {
+		item.ID = 0
+		tx.Create(&item)
+	}
 
 	if err := tx.Commit().Error; err != nil {
 		return err
+	}
+
+	if len(backup.Scripts) > 0 {
+		restoreScripts(config.C.Data.ScriptsDir, backup.Scripts)
 	}
 
 	GetSchedulerV2().ReloadAllJobs()

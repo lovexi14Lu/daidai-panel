@@ -41,6 +41,7 @@ function startStatusPolling() {
       stopStatusPolling()
       return
     }
+    if (selectedIds.value.length > 0) return
     try {
       const params: any = { page: page.value, page_size: pageSize.value }
       if (keyword.value) params.keyword = keyword.value
@@ -579,5 +580,40 @@ async function handleImport(event: Event) {
 :deep(.el-button--small) {
   font-size: 13px;
   padding: 6px 12px;
+}
+
+@media screen and (max-width: 768px) {
+  .page-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+    margin-bottom: 14px;
+
+    h2 { font-size: 18px; }
+
+    .header-actions {
+      width: 100%;
+      flex-wrap: wrap;
+    }
+  }
+
+  .filter-bar {
+    flex-wrap: wrap;
+    gap: 8px;
+
+    .batch-actions {
+      width: 100%;
+      margin-left: 0;
+      flex-wrap: wrap;
+    }
+  }
+
+  :deep(.el-table) {
+    font-size: 12px;
+
+    .el-table__cell {
+      padding: 8px 0;
+    }
+  }
 }
 </style>

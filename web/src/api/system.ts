@@ -18,6 +18,13 @@ export const systemApi = {
     request.post('/system/restore', { filename, password }),
   deleteBackup: (filename: string) =>
     request.delete('/system/backup', { params: { filename } }),
+  uploadBackup: (file: File) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    return request.post('/system/backup/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+  },
 }
 
 export const configApi = {

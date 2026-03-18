@@ -17,7 +17,7 @@ const form = ref({
   name: '',
   command: '',
   cron_expression: '* * * * *',
-  timeout: 300,
+  timeout: 86400,
   max_retries: 0,
   retry_interval: 60,
   notify_on_failure: true,
@@ -37,7 +37,7 @@ watch(() => props.visible, (val) => {
       name: props.task.name || '',
       command: props.task.command || '',
       cron_expression: props.task.cron_expression || '* * * * *',
-      timeout: props.task.timeout ?? 300,
+      timeout: props.task.timeout ?? 86400,
       max_retries: props.task.max_retries ?? 0,
       retry_interval: props.task.retry_interval ?? 60,
       notify_on_failure: props.task.notify_on_failure ?? true,
@@ -52,7 +52,7 @@ watch(() => props.visible, (val) => {
     form.value = {
       name: p?.name || '', command: p?.command || '',
       cron_expression: p?.cron_expression || '* * * * *',
-      timeout: 300, max_retries: 0, retry_interval: 60,
+      timeout: 86400, max_retries: 0, retry_interval: 60,
       notify_on_failure: true, labels: [], depends_on: null,
       task_before: '', task_after: '', allow_multiple_instances: false,
     }

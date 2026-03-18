@@ -42,12 +42,12 @@ COPY --from=frontend-builder /build/dist /app/web
 COPY docker/nginx.conf /etc/nginx/http.d/default.conf
 COPY docker/entrypoint.sh /app/entrypoint.sh
 
-RUN chmod +x /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh && sed -i 's/\r$//' /app/entrypoint.sh
 
 ENV TZ=Asia/Shanghai
 ENV PANEL_PORT=5700
 
-EXPOSE 5700
+EXPOSE ${PANEL_PORT}
 
 VOLUME ["/app/Dumb-Panel"]
 

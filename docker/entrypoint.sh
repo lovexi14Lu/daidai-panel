@@ -18,7 +18,7 @@ fi
 
 PANEL_PORT=${PANEL_PORT:-5700}
 
-sed -i "s/listen 5700/listen ${PANEL_PORT}/" /etc/nginx/http.d/default.conf
+sed -i "s/listen [0-9]*/listen ${PANEL_PORT}/" /etc/nginx/http.d/default.conf
 
 cat > /app/config.yaml <<YAML
 server:

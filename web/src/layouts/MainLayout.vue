@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
@@ -10,8 +10,25 @@ const route = useRoute()
 const authStore = useAuthStore()
 const themeStore = useThemeStore()
 const isCollapsed = ref(false)
+const isMobile = ref(false)
+const drawerVisible = ref(false)
 const panelTitle = ref('呆呆面板')
 const panelIcon = ref('')
+
+function checkMobile() {
+  isMobile.value = window.innerWidth <= 768
+  if (isMobile.value) isCollapsed.value = true
+}
+
+onMounted(() => {
+  checkMobile()
+  window.addEventListener('resize', checkMobile)
+  loadPanelSettings()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', checkMobile)
+})
 
 const menuItems = computed(() => [
   { index: '/dashboard', title: '仪表板', icon: 'Odometer' },
@@ -32,6 +49,15 @@ const activeMenu = computed(() => route.path)
 
 function handleMenuSelect(index: string) {
   router.push(index)
+  if (isMobile.value) drawerVisible.value = false
+}
+
+function toggleSidebar() {
+  if (isMobile.value) {
+    drawerVisible.value = !drawerVisible.value
+  } else {
+    isCollapsed.value = !isCollapsed.value
+  }
 }
 
 async function handleLogout() {
@@ -45,13 +71,11 @@ async function loadPanelSettings() {
     if (res.data?.panel_icon) panelIcon.value = res.data.panel_icon
   } catch {}
 }
-
-onMounted(loadPanelSettings)
 </script>
 
 <template>
   <el-container class="layout-container">
-    <el-aside :width="isCollapsed ? '64px' : '220px'" class="layout-aside">
+    <el-aside v-if="!isMobile" :width="isCollapsed ? '64px' : '220px'" class="layout-aside">
       <div class="logo-area">
         <img :src="panelIcon || '/favicon.svg'" alt="logo" class="logo-img" />
         <span v-show="!isCollapsed" class="logo-text">{{ panelTitle }}</span>
@@ -70,17 +94,42 @@ onMounted(loadPanelSettings)
       </el-menu>
     </el-aside>
 
+    <el-drawer
+      v-if="isMobile"
+      v-model="drawerVisible"
+      direction="ltr"
+      :size="240"
+      :with-header="false"
+      :show-close="false"
+    >
+      <div class="logo-area mobile-logo">
+        <img :src="panelIcon || '/favicon.svg'" alt="logo" class="logo-img" />
+        <span class="logo-text">{{ panelTitle }}</span>
+      </div>
+      <el-menu
+        :default-active="activeMenu"
+        background-color="transparent"
+        @select="handleMenuSelect"
+      >
+        <el-menu-item v-for="item in menuItems" :key="item.index" :index="item.index">
+          <el-icon><component :is="item.icon" /></el-icon>
+          <template #title>{{ item.title }}</template>
+        </el-menu-item>
+      </el-menu>
+    </el-drawer>
+
     <el-container>
       <el-header class="layout-header">
         <div class="header-left">
-          <el-button :icon="isCollapsed ? 'Expand' : 'Fold'" text @click="isCollapsed = !isCollapsed" />
+          <el-button :icon="isMobile ? 'Operation' : (isCollapsed ? 'Expand' : 'Fold')" text @click="toggleSidebar" />
+          <span v-if="isMobile" class="mobile-title">{{ panelTitle }}</span>
         </div>
         <div class="header-right">
           <el-button :icon="themeStore.isDark ? 'Sunny' : 'Moon'" text circle @click="themeStore.toggleTheme" />
           <el-dropdown trigger="click">
             <span class="user-dropdown">
               <el-icon><User /></el-icon>
-              <span>{{ authStore.user?.username || 'User' }}</span>
+              <span v-if="!isMobile">{{ authStore.user?.username || 'User' }}</span>
             </span>
             <template #dropdown>
               <el-dropdown-menu>
@@ -152,6 +201,22 @@ onMounted(loadPanelSettings)
   }
 }
 
+.mobile-logo {
+  border-bottom: 1px solid var(--el-border-color-light);
+  justify-content: flex-start;
+  padding: 0 16px;
+}
+
+.mobile-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin-left: 4px;
+  background: linear-gradient(135deg, #409EFF, #7B5CFA);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
 .layout-header {
   height: 60px;
   display: flex;
@@ -161,6 +226,12 @@ onMounted(loadPanelSettings)
   padding: 0 20px;
   background: var(--el-bg-color);
   backdrop-filter: blur(8px);
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .header-right {
@@ -190,6 +261,17 @@ onMounted(loadPanelSettings)
   background: var(--el-bg-color-page);
   overflow-y: auto;
   padding: 20px;
+}
+
+@media screen and (max-width: 768px) {
+  .layout-header {
+    padding: 0 12px;
+    height: 50px;
+  }
+
+  .layout-main {
+    padding: 12px;
+  }
 }
 
 .page-fade-enter-active {

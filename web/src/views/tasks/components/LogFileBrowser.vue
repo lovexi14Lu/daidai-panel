@@ -94,14 +94,14 @@ function handleClose() {
         <div v-if="logFiles.length === 0" class="empty-hint">暂无日志文件</div>
         <div
           v-for="file in logFiles"
-          :key="file.name"
+          :key="file.filename"
           class="file-item"
-          :class="{ active: selectedFile === file.name }"
-          @click="viewFile(file.name)"
+          :class="{ active: selectedFile === file.filename }"
+          @click="viewFile(file.filename)"
         >
           <div class="file-info">
             <el-icon><Document /></el-icon>
-            <span class="file-name">{{ file.name }}</span>
+            <span class="file-name">{{ file.filename }}</span>
           </div>
           <div class="file-actions">
             <span class="file-size">{{ formatBytes(file.size) }}</span>
@@ -109,7 +109,7 @@ function handleClose() {
               type="danger"
               text
               size="small"
-              @click.stop="deleteFile(file.name)"
+              @click.stop="deleteFile(file.filename)"
             >
               <el-icon><Delete /></el-icon>
             </el-button>

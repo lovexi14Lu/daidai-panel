@@ -100,6 +100,14 @@ func (e *TaskExecutor) OnTaskFailed(req *ExecutionRequest, err error) {
 	})
 }
 
+func KillProcessByPid(pid int) {
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return
+	}
+	p.Kill()
+}
+
 func (e *TaskExecutor) StopTask(taskID uint) bool {
 	e.processLock.Lock()
 	defer e.processLock.Unlock()
@@ -151,7 +159,7 @@ func (e *TaskExecutor) runTask(req *ExecutionRequest, taskLog *model.TaskLog, ti
 		}
 	}
 
-	commandTimeout := model.GetConfigInt("command_timeout", 300)
+	commandTimeout := model.GetConfigInt("command_timeout", 86400)
 	maxLogSize := model.GetConfigInt("max_log_content_size", 102400)
 
 	timeout := task.Timeout
