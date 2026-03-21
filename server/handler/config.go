@@ -15,17 +15,72 @@ func NewConfigHandler() *ConfigHandler {
 	return &ConfigHandler{}
 }
 
+func reloadRuntimeConfigKeys(keys ...string) {
+	for _, key := range keys {
+		if key != "trusted_proxy_cidrs" {
+			continue
+		}
+		_ = middleware.ConfigureTrustedProxyCIDRs(model.GetRegisteredConfig(key))
+	}
+}
+
+func buildConfigResponseItem(cfg *model.SystemConfig, def *model.SystemConfigDefinition) gin.H {
+	item := gin.H{
+		"registered": false,
+		"updated_at": nil,
+	}
+
+	if cfg != nil {
+		item["value"] = cfg.Value
+		item["description"] = cfg.Description
+		item["updated_at"] = cfg.UpdatedAt
+	} else {
+		item["value"] = ""
+		item["description"] = ""
+	}
+
+	if def != nil {
+		item["registered"] = true
+		item["default_value"] = def.DefaultValue
+		item["value_type"] = def.ValueType
+		item["group"] = def.Group
+		item["description"] = def.Description
+		if cfg == nil || cfg.Value == "" {
+			item["value"] = def.DefaultValue
+		}
+		if len(def.Options) > 0 {
+			item["options"] = def.Options
+		}
+	}
+
+	return item
+}
+
 func (h *ConfigHandler) List(c *gin.Context) {
 	var configs []model.SystemConfig
 	database.DB.Order("key ASC").Find(&configs)
 
-	data := make(map[string]interface{})
+	configMap := make(map[string]model.SystemConfig, len(configs))
 	for _, cfg := range configs {
-		data[cfg.Key] = gin.H{
-			"value":       cfg.Value,
-			"description": cfg.Description,
-			"updated_at":  cfg.UpdatedAt,
+		configMap[cfg.Key] = cfg
+	}
+
+	data := make(map[string]interface{})
+	for _, def := range model.SystemConfigDefinitions() {
+		cfg, exists := configMap[def.Key]
+		if exists {
+			cfgCopy := cfg
+			data[def.Key] = buildConfigResponseItem(&cfgCopy, &def)
+			delete(configMap, def.Key)
+			continue
 		}
+		defCopy := def
+		data[def.Key] = buildConfigResponseItem(nil, &defCopy)
+	}
+
+	for key, cfg := range configMap {
+		cfgCopy := cfg
+		data[key] = buildConfigResponseItem(&cfgCopy, nil)
 	}
 
 	response.Success(c, gin.H{"data": data})
@@ -33,8 +88,35 @@ func (h *ConfigHandler) List(c *gin.Context) {
 
 func (h *ConfigHandler) Get(c *gin.Context) {
 	key := c.Param("key")
-	value := model.GetConfig(key, "")
-	response.Success(c, gin.H{"data": gin.H{"key": key, "value": value}})
+
+	var cfg model.SystemConfig
+	cfgExists := database.DB.Where("`key` = ?", key).First(&cfg).Error == nil
+
+	if def, exists := model.GetSystemConfigDefinition(key); exists {
+		var cfgPtr *model.SystemConfig
+		if cfgExists {
+			cfgPtr = &cfg
+		}
+		item := buildConfigResponseItem(cfgPtr, &def)
+		response.Success(c, gin.H{"data": gin.H{
+			"key":    key,
+			"value":  item["value"],
+			"config": item,
+		}})
+		return
+	}
+
+	if !cfgExists {
+		response.NotFound(c, "配置不存在")
+		return
+	}
+
+	item := buildConfigResponseItem(&cfg, nil)
+	response.Success(c, gin.H{"data": gin.H{
+		"key":    key,
+		"value":  item["value"],
+		"config": item,
+	}})
 }
 
 func (h *ConfigHandler) Set(c *gin.Context) {
@@ -48,20 +130,15 @@ func (h *ConfigHandler) Set(c *gin.Context) {
 		return
 	}
 
+	if err := model.SetConfig(req.Key, req.Value); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	reloadRuntimeConfigKeys(req.Key)
+
 	var cfg model.SystemConfig
-	if err := database.DB.Where("`key` = ?", req.Key).First(&cfg).Error; err != nil {
-		cfg = model.SystemConfig{
-			Key:         req.Key,
-			Value:       req.Value,
-			Description: req.Description,
-		}
-		database.DB.Create(&cfg)
-	} else {
-		updates := map[string]interface{}{"value": req.Value}
-		if req.Description != "" {
-			updates["description"] = req.Description
-		}
-		database.DB.Model(&cfg).Updates(updates)
+	if err := database.DB.Where("`key` = ?", req.Key).First(&cfg).Error; err == nil && req.Description != "" {
+		database.DB.Model(&cfg).Update("description", req.Description)
 	}
 
 	response.Success(c, gin.H{"message": "配置已更新"})
@@ -77,7 +154,13 @@ func (h *ConfigHandler) BatchSet(c *gin.Context) {
 	}
 
 	for key, value := range req.Configs {
-		model.SetConfig(key, value)
+		if err := model.SetConfig(key, value); err != nil {
+			response.BadRequest(c, err.Error())
+			return
+		}
+	}
+	for key := range req.Configs {
+		reloadRuntimeConfigKeys(key)
 	}
 
 	response.Success(c, gin.H{"message": "配置已更新"})

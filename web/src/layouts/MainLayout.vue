@@ -4,6 +4,26 @@ import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
 import { systemApi } from '@/api/system'
+import {
+  Bell,
+  Box,
+  Connection,
+  Document,
+  Download,
+  Expand,
+  Fold,
+  Key,
+  Moon,
+  Odometer,
+  Operation,
+  SetUp,
+  Setting,
+  Sunny,
+  Tickets,
+  Timer,
+  User,
+  UserFilled,
+} from '@element-plus/icons-vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -15,6 +35,44 @@ const drawerVisible = ref(false)
 const panelTitle = ref('呆呆面板')
 const panelIcon = ref('')
 const panelVersion = ref('')
+
+const roleLevel: Record<string, number> = {
+  viewer: 1,
+  operator: 2,
+  admin: 3,
+}
+
+function hasRole(minRole: string) {
+  const currentRole = authStore.user?.role
+  if (!currentRole) return false
+  return (roleLevel[currentRole] || 0) >= (roleLevel[minRole] || 0)
+}
+
+const currentSection = computed(() => {
+  const matched = [...route.matched].reverse().find(item => item.meta.section)
+  return matched?.meta.section === 'admin' ? 'admin' : 'workspace'
+})
+
+const canAccessAdmin = computed(() => hasRole('admin'))
+
+const workspaceItems = [
+  { index: '/dashboard', title: '仪表板', icon: Odometer, minRole: 'viewer' },
+  { index: '/tasks', title: '定时任务', icon: Timer, minRole: 'viewer' },
+  { index: '/subscriptions', title: '订阅管理', icon: Download, minRole: 'operator' },
+  { index: '/envs', title: '环境变量', icon: Setting, minRole: 'operator' },
+  { index: '/logs', title: '执行日志', icon: Tickets, minRole: 'viewer' },
+  { index: '/scripts', title: '脚本管理', icon: Document, minRole: 'operator' },
+  { index: '/deps', title: '依赖管理', icon: Box, minRole: 'admin' },
+  { index: '/api-docs', title: '接口文档', icon: Connection, minRole: 'viewer' },
+  { index: '/profile', title: '个人设置', icon: User, minRole: 'viewer' },
+]
+
+const adminItems = [
+  { index: '/admin/settings', title: '系统设置', icon: SetUp, minRole: 'admin' },
+  { index: '/admin/notifications', title: '通知渠道', icon: Bell, minRole: 'admin' },
+  { index: '/admin/users', title: '用户管理', icon: UserFilled, minRole: 'admin' },
+  { index: '/admin/open-api', title: 'Open API', icon: Key, minRole: 'admin' },
+]
 
 function checkMobile() {
   isMobile.value = window.innerWidth <= 768
@@ -35,22 +93,16 @@ onUnmounted(() => {
   window.removeEventListener('resize', checkMobile)
 })
 
-const menuItems = computed(() => [
-  { index: '/dashboard', title: '仪表板', icon: 'Odometer' },
-  { index: '/tasks', title: '定时任务', icon: 'Timer' },
-  { index: '/subscriptions', title: '订阅管理', icon: 'Download' },
-  { index: '/envs', title: '环境变量', icon: 'Setting' },
-  { index: '/logs', title: '执行日志', icon: 'Tickets' },
-  { index: '/deps', title: '依赖管理', icon: 'Box' },
-  { index: '/scripts', title: '脚本管理', icon: 'Document' },
-  { index: '/notifications', title: '通知渠道', icon: 'Bell' },
-  { index: '/open-api', title: 'Open API', icon: 'Key' },
-  { index: '/users', title: '用户管理', icon: 'UserFilled' },
-  { index: '/api-docs', title: '接口文档', icon: 'Connection' },
-  { index: '/settings', title: '系统设置', icon: 'SetUp' },
-])
+const menuItems = computed(() => {
+  const allItems = currentSection.value === 'admin' ? adminItems : workspaceItems
+  return allItems.filter(item => hasRole(item.minRole))
+})
 
 const activeMenu = computed(() => route.path)
+const sectionLabel = computed(() => currentSection.value === 'admin' ? '管理后台' : '工作台')
+const sectionActionLabel = computed(() => currentSection.value === 'admin' ? '返回工作台' : '进入后台')
+const sidebarToggleIcon = computed(() => (isMobile.value ? Operation : (isCollapsed.value ? Expand : Fold)))
+const themeIcon = computed(() => (themeStore.isDark ? Sunny : Moon))
 
 function handleMenuSelect(index: string) {
   router.push(index)
@@ -67,6 +119,12 @@ function toggleSidebar() {
 
 async function handleLogout() {
   await authStore.logout()
+}
+
+function toggleSection() {
+  if (!canAccessAdmin.value) return
+  router.push(currentSection.value === 'admin' ? '/dashboard' : '/admin/settings')
+  if (isMobile.value) drawerVisible.value = false
 }
 
 async function loadPanelSettings() {
@@ -135,11 +193,15 @@ async function loadVersion() {
     <el-container>
       <el-header class="layout-header">
         <div class="header-left">
-          <el-button :icon="isMobile ? 'Operation' : (isCollapsed ? 'Expand' : 'Fold')" text @click="toggleSidebar" />
+          <el-button :icon="sidebarToggleIcon" text @click="toggleSidebar" />
           <span v-if="isMobile" class="mobile-title">{{ panelTitle }}</span>
+          <el-tag size="small" effect="plain" class="section-tag">{{ sectionLabel }}</el-tag>
         </div>
         <div class="header-right">
-          <el-button :icon="themeStore.isDark ? 'Sunny' : 'Moon'" text circle class="theme-btn" @click="themeStore.toggleTheme" />
+          <el-button v-if="canAccessAdmin" text class="section-switch-btn" @click="toggleSection">
+            {{ sectionActionLabel }}
+          </el-button>
+          <el-button :icon="themeIcon" text circle class="theme-btn" @click="themeStore.toggleTheme" />
           <el-dropdown trigger="click">
             <span class="user-dropdown">
               <el-icon><User /></el-icon>
@@ -147,7 +209,8 @@ async function loadVersion() {
             </span>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item @click="router.push('/settings')">系统设置</el-dropdown-item>
+                <el-dropdown-item @click="router.push('/profile')">个人设置</el-dropdown-item>
+                <el-dropdown-item v-if="canAccessAdmin" @click="router.push('/admin/settings')">系统设置</el-dropdown-item>
                 <el-dropdown-item divided @click="handleLogout">退出登录</el-dropdown-item>
               </el-dropdown-menu>
             </template>
@@ -257,13 +320,23 @@ async function loadVersion() {
 .header-left {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 8px;
 }
 
 .header-right {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.section-tag {
+  border-radius: 999px;
+  padding: 0 10px;
+}
+
+.section-switch-btn {
+  font-weight: 600;
+  border-radius: 999px;
 }
 
 .user-dropdown {

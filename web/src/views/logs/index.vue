@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { logApi } from '@/api/log'
 import { taskApi } from '@/api/task'
-import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { openAuthorizedEventStream, type EventStreamConnection } from '@/utils/sse'
 
 const logs = ref<any[]>([])
 const total = ref(0)
@@ -19,7 +19,7 @@ const detailLog = ref<any>(null)
 const selectedIds = ref<number[]>([])
 const autoRefresh = ref(true)
 let refreshTimer: ReturnType<typeof setInterval> | null = null
-let logEventSource: EventSource | null = null
+let logEventSource: EventStreamConnection | null = null
 const logContentRef = ref<HTMLElement>()
 let sseBuffer: string[] = []
 let sseFlushRaf = 0
@@ -114,30 +114,32 @@ async function viewDetail(log: any) {
   closeLogSSE()
 
   if (log.status === 2) {
-    const authStore = useAuthStore()
-    const url = `/api/v1/logs/${log.id}/stream?token=${authStore.accessToken}`
-    logEventSource = new EventSource(url)
+    const url = `/api/v1/logs/${log.task_id}/stream`
     sseBuffer = []
-    logEventSource.onmessage = (e) => {
-      sseBuffer.push(e.data)
-      if (!sseFlushRaf) {
-        sseFlushRaf = requestAnimationFrame(() => {
-          detailContent.value += sseBuffer.join('\n') + '\n'
-          sseBuffer = []
-          sseFlushRaf = 0
-          if (logContentRef.value) {
-            logContentRef.value.scrollTop = logContentRef.value.scrollHeight
-          }
-        })
+    logEventSource = openAuthorizedEventStream(url, {
+      onMessage(data) {
+        sseBuffer.push(data)
+        if (!sseFlushRaf) {
+          sseFlushRaf = requestAnimationFrame(() => {
+            detailContent.value += sseBuffer.join('\n') + '\n'
+            sseBuffer = []
+            sseFlushRaf = 0
+            if (logContentRef.value) {
+              logContentRef.value.scrollTop = logContentRef.value.scrollHeight
+            }
+          })
+        }
+      },
+      onEvent(event) {
+        if (event.event === 'done') {
+          closeLogSSE()
+          loadLogs()
+        }
+      },
+      onError() {
+        closeLogSSE()
       }
-    }
-    logEventSource.addEventListener('done', () => {
-      closeLogSSE()
-      loadLogs()
     })
-    logEventSource.onerror = () => {
-      closeLogSSE()
-    }
   } else {
     try {
       const res = await logApi.detail(log.id)
@@ -362,7 +364,7 @@ onBeforeUnmount(() => {
           <el-descriptions-item label="结束时间">{{ formatTime(detailLog.ended_at) }}</el-descriptions-item>
         </el-descriptions>
       </div>
-      <pre ref="logContentRef" class="log-content">{{ detailContent }}</pre>
+      <pre ref="logContentRef" class="log-content dd-log-surface">{{ detailContent }}</pre>
     </el-dialog>
 
     <el-dialog v-model="showFileBrowser" title="日志文件" width="650px">
@@ -385,7 +387,7 @@ onBeforeUnmount(() => {
     </el-dialog>
 
     <el-dialog v-model="showFileContent" :title="fileContentName" width="800px">
-      <pre class="log-content">{{ fileContentData }}</pre>
+      <pre class="log-content dd-log-surface">{{ fileContentData }}</pre>
     </el-dialog>
   </div>
 </template>
@@ -440,10 +442,8 @@ onBeforeUnmount(() => {
 }
 
 .log-content {
-  background: var(--el-fill-color-darker);
-  color: var(--el-text-color-primary);
   padding: 16px;
-  border-radius: 6px;
+  border-radius: 16px;
   max-height: 500px;
   overflow: auto;
   font-family: var(--dd-font-mono);

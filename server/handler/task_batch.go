@@ -1,0 +1,160 @@
+package handler
+
+import (
+	"fmt"
+
+	"daidai-panel/database"
+	"daidai-panel/model"
+	"daidai-panel/pkg/response"
+	"daidai-panel/service"
+
+	"github.com/gin-gonic/gin"
+)
+
+func (h *TaskHandler) Batch(c *gin.Context) {
+	var req struct {
+		IDs    []uint `json:"ids" binding:"required"`
+		Action string `json:"action" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "请求参数错误")
+		return
+	}
+
+	scheduler := service.GetSchedulerV2()
+	count := 0
+
+	for _, id := range req.IDs {
+		var task model.Task
+		if database.DB.First(&task, id).Error != nil {
+			continue
+		}
+
+		switch req.Action {
+		case "enable":
+			task.Status = model.TaskStatusEnabled
+			database.DB.Save(&task)
+			scheduler.AddJob(&task)
+		case "disable":
+			task.Status = model.TaskStatusDisabled
+			database.DB.Save(&task)
+			scheduler.RemoveJob(id)
+		case "delete":
+			scheduler.RemoveJob(id)
+			database.DB.Where("task_id = ?", id).Delete(&model.TaskLog{})
+			database.DB.Delete(&task)
+		case "run":
+			if task.Status != model.TaskStatusRunning {
+				if err := scheduler.RunNow(id); err == nil {
+					count++
+				}
+				continue
+			}
+		case "pin":
+			database.DB.Model(&task).Update("is_pinned", true)
+		case "unpin":
+			database.DB.Model(&task).Update("is_pinned", false)
+		}
+		count++
+	}
+
+	response.Success(c, gin.H{"message": fmt.Sprintf("批量%s: %d 个任务", req.Action, count), "count": count})
+}
+
+func (h *TaskHandler) BatchEnable(c *gin.Context) {
+	var req struct {
+		TaskIDs []uint `json:"task_ids" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "请求参数错误")
+		return
+	}
+
+	scheduler := service.GetSchedulerV2()
+	count := 0
+	for _, id := range req.TaskIDs {
+		var task model.Task
+		if database.DB.First(&task, id).Error != nil {
+			continue
+		}
+		task.Status = model.TaskStatusEnabled
+		database.DB.Save(&task)
+		scheduler.AddJob(&task)
+		count++
+	}
+	response.Success(c, gin.H{"message": fmt.Sprintf("已启用 %d 个任务", count), "success_count": count})
+}
+
+func (h *TaskHandler) BatchDisable(c *gin.Context) {
+	var req struct {
+		TaskIDs []uint `json:"task_ids" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "请求参数错误")
+		return
+	}
+
+	scheduler := service.GetSchedulerV2()
+	count := 0
+	for _, id := range req.TaskIDs {
+		var task model.Task
+		if database.DB.First(&task, id).Error != nil {
+			continue
+		}
+		task.Status = model.TaskStatusDisabled
+		database.DB.Save(&task)
+		scheduler.RemoveJob(id)
+		count++
+	}
+	response.Success(c, gin.H{"message": fmt.Sprintf("已禁用 %d 个任务", count), "success_count": count})
+}
+
+func (h *TaskHandler) BatchDelete(c *gin.Context) {
+	var req struct {
+		TaskIDs []uint `json:"task_ids" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "请求参数错误")
+		return
+	}
+
+	scheduler := service.GetSchedulerV2()
+	count := 0
+	for _, id := range req.TaskIDs {
+		scheduler.RemoveJob(id)
+		database.DB.Where("task_id = ?", id).Delete(&model.TaskLog{})
+		database.DB.Where("id = ?", id).Delete(&model.Task{})
+		count++
+	}
+	response.Success(c, gin.H{"message": fmt.Sprintf("已删除 %d 个任务", count), "count": count})
+}
+
+func (h *TaskHandler) BatchRun(c *gin.Context) {
+	var req struct {
+		TaskIDs []uint `json:"task_ids" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "请求参数错误")
+		return
+	}
+
+	if len(req.TaskIDs) > 10 {
+		response.BadRequest(c, "批量运行最多 10 个任务")
+		return
+	}
+
+	scheduler := service.GetSchedulerV2()
+	count := 0
+	for _, id := range req.TaskIDs {
+		var task model.Task
+		if database.DB.First(&task, id).Error != nil {
+			continue
+		}
+		if task.Status != model.TaskStatusRunning {
+			if err := scheduler.RunNow(id); err == nil {
+				count++
+			}
+		}
+	}
+	response.Success(c, gin.H{"message": fmt.Sprintf("已启动 %d 个任务", count), "count": count})
+}

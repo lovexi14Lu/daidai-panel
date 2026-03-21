@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import CronInput from './CronInput.vue'
+import { mergeTaskLabels, splitTaskLabels } from '../taskLabels'
 
 const props = defineProps<{
   visible: boolean
@@ -31,9 +32,12 @@ const form = ref({
 
 const labelInput = ref('')
 const activeTab = ref('basic')
+const internalLabels = ref<string[]>([])
 
 watch(() => props.visible, (val) => {
   if (val && props.task) {
+    const { editableLabels, internalLabels: hiddenLabels } = splitTaskLabels(props.task.labels || [])
+    internalLabels.value = hiddenLabels
     form.value = {
       name: props.task.name || '',
       command: props.task.command || '',
@@ -43,7 +47,7 @@ watch(() => props.visible, (val) => {
       retry_interval: props.task.retry_interval ?? 60,
       notify_on_failure: props.task.notify_on_failure ?? true,
       notify_on_success: props.task.notify_on_success ?? false,
-      labels: props.task.labels || [],
+      labels: editableLabels,
       depends_on: props.task.depends_on || null,
       task_before: props.task.task_before || '',
       task_after: props.task.task_after || '',
@@ -51,6 +55,7 @@ watch(() => props.visible, (val) => {
     }
   } else if (val) {
     const p = props.prefill
+    internalLabels.value = []
     form.value = {
       name: p?.name || '', command: p?.command || '',
       cron_expression: p?.cron_expression || '* * * * *',
@@ -77,6 +82,7 @@ function removeLabel(label: string) {
 function handleSubmit() {
   if (!form.value.name || !form.value.command || !form.value.cron_expression) return
   const data = { ...form.value }
+  data.labels = mergeTaskLabels(form.value.labels, internalLabels.value)
   if (!data.task_before) data.task_before = ''
   if (!data.task_after) data.task_after = ''
   emit('submit', data)

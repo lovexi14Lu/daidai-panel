@@ -86,12 +86,25 @@ const configFields = computed(() => {
       { key: 'key', label: 'PushKey', type: 'input', placeholder: 'PushDeer 的 PushKey' },
       { key: 'server', label: '服务器 (可选)', type: 'input', placeholder: '默认 https://api2.pushdeer.com' },
     ]
+    case 'pushme': return [
+      { key: 'key', label: 'PushMe Key', type: 'input', placeholder: 'PushMe 的 push_key' },
+      { key: 'server', label: '接口地址 (可选)', type: 'input', placeholder: '默认 https://push.i-i.me' },
+      { key: 'message_type', label: '消息类型 (可选)', type: 'input', placeholder: '按 PushMe 支持的 type 值填写' },
+    ]
     case 'chanify': return [
       { key: 'token', label: 'Token', type: 'input', placeholder: 'Chanify 设备 Token' },
       { key: 'server', label: '服务器 (可选)', type: 'input', placeholder: '默认 https://api.chanify.net' },
     ]
     case 'igot': return [
       { key: 'key', label: 'Key', type: 'input', placeholder: 'iGot 推送 Key' },
+    ]
+    case 'qmsg': return [
+      { key: 'key', label: 'Qmsg Key', type: 'input', placeholder: 'Qmsg 酱的 Key' },
+      { key: 'mode', label: '发送模式', type: 'select', placeholder: '选择 send 或 group', options: [
+        { label: '私聊/默认 (send)', value: 'send' },
+        { label: '群发 (group)', value: 'group' },
+      ]},
+      { key: 'qq', label: 'QQ 号/群号 (可选)', type: 'input', placeholder: '留空则按 Qmsg 端默认配置发送' },
     ]
     case 'pushover': return [
       { key: 'token', label: 'API Token', type: 'input', placeholder: '应用 API Token' },
@@ -114,6 +127,17 @@ const configFields = computed(() => {
         { label: '高 (4)', value: '4' },
         { label: '紧急 (5)', value: '5' },
       ]},
+    ]
+    case 'wxpusher': return [
+      { key: 'app_token', label: 'App Token', type: 'input', placeholder: 'WxPusher 的 appToken' },
+      { key: 'uids', label: 'UID 列表 (可选)', type: 'textarea', placeholder: '多个 UID 可用分号、逗号或换行分隔' },
+      { key: 'topic_ids', label: 'Topic ID 列表 (可选)', type: 'textarea', placeholder: '多个 Topic ID 可用分号、逗号或换行分隔' },
+      { key: 'content_type', label: '内容类型 (可选)', type: 'select', placeholder: '默认文本消息', options: [
+        { label: '文本 (1)', value: '1' },
+        { label: 'HTML (2)', value: '2' },
+        { label: 'Markdown (3)', value: '3' },
+      ]},
+      { key: 'server', label: '接口地址 (可选)', type: 'input', placeholder: '默认 https://wxpusher.zjiecode.com/api/send/message' },
     ]
     case 'custom': return [
       { key: 'url', label: 'URL', type: 'input', placeholder: 'https://example.com/api/notify' },

@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { ref, onMounted, computed, onUnmounted } from 'vue'
+import { ref, onMounted, computed, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
 import { authApi } from '@/api/auth'
 import { ElMessage } from 'element-plus'
+import { Hide, Key, Lock, Moon, Sunny, User, View } from '@element-plus/icons-vue'
 import Characters, { type CharacterMood } from './Characters.vue'
+import { createGeeTestInstance, type GeeTestInstance, type GeeTestValidateResult } from '@/utils/geetest'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -21,6 +23,24 @@ const focusField = ref<'none' | 'username' | 'password'>('none')
 const containerRef = ref<HTMLDivElement>()
 
 const panelVersion = ref('')
+const require2FA = ref(false)
+const captchaConfig = ref({
+  enabled: false,
+  captcha_id: '',
+  configured: false,
+  required: false,
+  require_after_failures: 3,
+  message: ''
+})
+const captchaVisible = ref(false)
+const captchaPreparing = ref(false)
+const captchaReady = ref(false)
+const captchaVerified = ref(false)
+const captchaResult = ref<GeeTestValidateResult | null>(null)
+const captchaStatusText = ref('')
+let captchaInstance: GeeTestInstance | null = null
+let captchaInitPromise: Promise<GeeTestInstance> | null = null
+let pendingSubmitAfterCaptcha = false
 
 const lockCountdown = ref(0)
 let lockTimer: ReturnType<typeof setInterval> | null = null
@@ -39,11 +59,19 @@ function startLockCountdown(seconds: number) {
 
 onUnmounted(() => {
   if (lockTimer) clearInterval(lockTimer)
+  resetCaptchaProof()
 })
 
 const form = ref({
   username: '',
-  password: ''
+  password: '',
+  totp_code: ''
+})
+
+watch(() => form.value.username, () => {
+  captchaConfig.value.required = false
+  pendingSubmitAfterCaptcha = false
+  resetCaptchaProof()
 })
 
 onMounted(async () => {
@@ -54,6 +82,9 @@ onMounted(async () => {
     isInit.value = true
   } finally {
     checkingInit.value = false
+  }
+  if (isInit.value) {
+    await loadCaptchaConfig(form.value.username)
   }
   try {
     const vRes = await fetch('/api/system/public-version')
@@ -72,10 +103,136 @@ function handleMouseMove(e: MouseEvent) {
   mousePos.value = { x, y }
 }
 
+function resetCaptchaProof(keepVisible = false) {
+  captchaVerified.value = false
+  captchaResult.value = null
+  if (captchaInstance) {
+    captchaInstance.reset()
+  }
+  captchaReady.value = Boolean(captchaInstance)
+  if (!keepVisible) {
+    captchaVisible.value = false
+    captchaStatusText.value = ''
+  }
+}
+
+async function loadCaptchaConfig(username = form.value.username, silent = true) {
+  try {
+    const res = await authApi.captchaConfig(username || undefined)
+    captchaConfig.value = {
+      enabled: res.enabled,
+      captcha_id: res.captcha_id || '',
+      configured: res.configured,
+      required: res.required,
+      require_after_failures: res.require_after_failures || 3,
+      message: res.message || ''
+    }
+
+    if (!res.enabled) {
+      pendingSubmitAfterCaptcha = false
+      resetCaptchaProof()
+      return captchaConfig.value
+    }
+
+    if (res.required) {
+      captchaVisible.value = true
+      if (!captchaVerified.value) {
+        captchaStatusText.value = `连续失败达到 ${res.require_after_failures || 3} 次，请先完成人机验证`
+      }
+    } else if (!captchaVerified.value) {
+      captchaVisible.value = false
+      captchaStatusText.value = res.message || ''
+    }
+
+    return captchaConfig.value
+  } catch (error) {
+    if (!silent) {
+      ElMessage.error('加载验证码配置失败')
+    }
+    return null
+  }
+}
+
+async function ensureCaptchaInstance() {
+  if (captchaInstance) {
+    return captchaInstance
+  }
+  if (!captchaConfig.value.enabled || !captchaConfig.value.captcha_id) {
+    throw new Error('验证码未启用或未配置完整')
+  }
+
+  if (!captchaInitPromise) {
+    captchaPreparing.value = true
+    captchaInitPromise = createGeeTestInstance(
+      {
+        captchaId: captchaConfig.value.captcha_id,
+        language: 'zho',
+        product: 'bind'
+      },
+      {
+        onReady() {
+          captchaReady.value = true
+          captchaStatusText.value = '验证码已就绪，请完成验证'
+        },
+        onSuccess(result) {
+          captchaResult.value = result
+          captchaVerified.value = true
+          captchaVisible.value = true
+          captchaStatusText.value = '人机验证已完成，本次登录可继续提交'
+          ElMessage.success('验证码验证成功')
+
+          if (pendingSubmitAfterCaptcha) {
+            pendingSubmitAfterCaptcha = false
+            void handleSubmit()
+          }
+        },
+        onError(error) {
+          captchaVerified.value = false
+          captchaResult.value = null
+          captchaStatusText.value = error.message || '验证码异常，请重试'
+          ElMessage.error(captchaStatusText.value)
+        }
+      }
+    ).then((instance) => {
+      captchaInstance = instance
+      return instance
+    }).finally(() => {
+      captchaPreparing.value = false
+      captchaInitPromise = null
+    })
+  }
+
+  return captchaInitPromise
+}
+
+async function triggerCaptcha() {
+  captchaVisible.value = true
+
+  if (!captchaConfig.value.enabled) {
+    const latest = await loadCaptchaConfig(form.value.username, false)
+    if (!latest?.enabled) {
+      throw new Error(latest?.message || '验证码未启用')
+    }
+  }
+
+  if (captchaVerified.value) {
+    resetCaptchaProof(true)
+  }
+
+  captchaStatusText.value = captchaStatusText.value || '正在准备验证码'
+  const instance = await ensureCaptchaInstance()
+  instance.show()
+}
+
 function handleUsernameFocus() {
   focusField.value = 'username'
   mood.value = 'typing'
   pwdVisible.value = false
+}
+
+function handleUsernameBlur() {
+  handleBlur()
+  void loadCaptchaConfig(form.value.username)
 }
 
 function handlePasswordFocus() {
@@ -102,16 +259,36 @@ async function handleSubmit() {
     ElMessage.warning('请输入用户名和密码')
     return
   }
+  if (require2FA.value && !form.value.totp_code) {
+    ElMessage.warning('请输入两步验证码')
+    return
+  }
 
   loading.value = true
+  const submittedCaptcha = captchaResult.value ? { ...captchaResult.value } : null
   try {
     if (!isInit.value) {
       await authApi.init(form.value.username, form.value.password)
       ElMessage.success('初始化成功')
       isInit.value = true
+      await loadCaptchaConfig(form.value.username)
     }
 
-    await authStore.login(form.value.username, form.value.password)
+    const latestCaptchaConfig = await loadCaptchaConfig(form.value.username)
+    if (latestCaptchaConfig?.enabled && latestCaptchaConfig.required && !captchaVerified.value) {
+      captchaVisible.value = true
+      captchaStatusText.value = `连续失败达到 ${latestCaptchaConfig.require_after_failures} 次，请先完成人机验证`
+      pendingSubmitAfterCaptcha = true
+      await triggerCaptcha()
+      return
+    }
+
+    await authStore.login(form.value.username, form.value.password, form.value.totp_code, submittedCaptcha)
+    require2FA.value = false
+    form.value.totp_code = ''
+    captchaConfig.value.required = false
+    pendingSubmitAfterCaptcha = false
+    resetCaptchaProof()
     mood.value = 'success'
     ElMessage.success('登录成功')
     setTimeout(() => {
@@ -120,8 +297,33 @@ async function handleSubmit() {
   } catch (err: any) {
     mood.value = 'error'
     const data = err?.response?.data
+    if (data?.two_factor_required) {
+      require2FA.value = true
+    }
     if (data?.locked && data?.remaining_seconds > 0) {
       startLockCountdown(data.remaining_seconds)
+    }
+    if (data?.captcha_id) {
+      captchaConfig.value.captcha_id = data.captcha_id
+    }
+    if (typeof data?.require_after_failures === 'number') {
+      captchaConfig.value.require_after_failures = data.require_after_failures
+    }
+    if (data?.captcha_required) {
+      captchaConfig.value.enabled = true
+      captchaConfig.value.required = true
+      captchaVisible.value = true
+      captchaStatusText.value = data?.captcha_invalid
+        ? '验证码已失效，请重新完成人机验证'
+        : `连续失败达到 ${data?.require_after_failures || captchaConfig.value.require_after_failures || 3} 次，请先完成人机验证`
+      resetCaptchaProof(true)
+      pendingSubmitAfterCaptcha = false
+      void triggerCaptcha().catch(() => {})
+    } else if (submittedCaptcha) {
+      resetCaptchaProof(false)
+      pendingSubmitAfterCaptcha = false
+    } else if (!data) {
+      pendingSubmitAfterCaptcha = false
     }
     const msg = data?.error || err?.message || '操作失败'
     ElMessage.error(msg)
@@ -136,13 +338,33 @@ async function handleSubmit() {
 const titleText = computed(() => isInit.value ? '欢迎回来!' : '初始化管理员')
 const subtitleText = computed(() => isInit.value ? '请输入您的登录信息' : '首次使用，请设置管理员账号')
 const btnText = computed(() => isInit.value ? '登 录' : '初始化并登录')
+const themeIcon = computed(() => (themeStore.isDark ? Sunny : Moon))
+const showCaptchaPanel = computed(() => captchaVisible.value || captchaVerified.value)
+const captchaActionText = computed(() => {
+  if (captchaPreparing.value) return '加载中...'
+  if (captchaVerified.value) return '重新验证'
+  if (captchaReady.value) return '开始验证'
+  return '加载验证码'
+})
+const captchaHintText = computed(() => {
+  if (captchaVerified.value) {
+    return '已完成人机验证，本次登录可继续提交。'
+  }
+  if (captchaStatusText.value) {
+    return captchaStatusText.value
+  }
+  if (captchaConfig.value.enabled) {
+    return `连续失败达到 ${captchaConfig.value.require_after_failures} 次后，需要先完成人机验证。`
+  }
+  return '当前未启用验证码。'
+})
 </script>
 
 <template>
   <div class="login-page" @mousemove="handleMouseMove">
     <div class="theme-toggle">
       <el-button
-        :icon="themeStore.isDark ? 'Sunny' : 'Moon'"
+        :icon="themeIcon"
         text
         circle
         size="large"
@@ -176,10 +398,10 @@ const btnText = computed(() => isInit.value ? '登 录' : '初始化并登录')
               <el-input
                 v-model="form.username"
                 placeholder="用户名"
-                prefix-icon="User"
+                :prefix-icon="User"
                 size="large"
                 @focus="handleUsernameFocus"
-                @blur="handleBlur"
+                @blur="handleUsernameBlur"
               />
             </el-form-item>
             <el-form-item>
@@ -187,7 +409,7 @@ const btnText = computed(() => isInit.value ? '登 录' : '初始化并登录')
                 v-model="form.password"
                 :type="pwdVisible ? 'text' : 'password'"
                 placeholder="密码"
-                prefix-icon="Lock"
+                :prefix-icon="Lock"
                 size="large"
                 @focus="handlePasswordFocus"
                 @blur="handleBlur"
@@ -200,6 +422,45 @@ const btnText = computed(() => isInit.value ? '登 录' : '初始化并登录')
                   </el-icon>
                 </template>
               </el-input>
+            </el-form-item>
+            <el-form-item v-if="require2FA">
+              <el-input
+                v-model="form.totp_code"
+                maxlength="6"
+                placeholder="两步验证码"
+                :prefix-icon="Key"
+                size="large"
+                @keyup.enter="handleSubmit"
+              />
+            </el-form-item>
+            <el-form-item v-if="showCaptchaPanel" class="captcha-form-item">
+              <div class="captcha-panel">
+                <div class="captcha-panel__header">
+                  <span class="captcha-panel__title">极验人机验证</span>
+                  <el-tag v-if="captchaVerified" type="success" size="small" effect="plain">已完成</el-tag>
+                  <el-tag v-else type="warning" size="small" effect="plain">待验证</el-tag>
+                </div>
+                <p class="captcha-panel__hint">{{ captchaHintText }}</p>
+                <div class="captcha-panel__actions">
+                  <el-button
+                    type="primary"
+                    plain
+                    size="large"
+                    :loading="captchaPreparing"
+                    @click="triggerCaptcha"
+                  >
+                    {{ captchaActionText }}
+                  </el-button>
+                  <el-button
+                    v-if="captchaVerified"
+                    text
+                    size="large"
+                    @click="resetCaptchaProof(true)"
+                  >
+                    清空结果
+                  </el-button>
+                </div>
+              </div>
             </el-form-item>
             <el-form-item>
               <el-button
@@ -373,6 +634,41 @@ const btnText = computed(() => isInit.value ? '登 录' : '初始化并登录')
   }
 }
 
+.captcha-panel {
+  width: 100%;
+  border: 1px solid rgba(31, 31, 31, 0.08);
+  border-radius: 12px;
+  background: #fafafc;
+  padding: 14px 16px;
+}
+
+.captcha-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.captcha-panel__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f1f1f;
+}
+
+.captcha-panel__hint {
+  margin: 10px 0 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #6b7280;
+}
+
+.captcha-panel__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
 .pwd-toggle {
   cursor: pointer;
   color: #8c8c8c;
@@ -502,6 +798,19 @@ html.dark {
     .el-input__suffix .el-icon {
       color: #555568;
     }
+  }
+
+  .captcha-panel {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .captcha-panel__title {
+    color: #e8e8ec;
+  }
+
+  .captcha-panel__hint {
+    color: #9da3b4;
   }
 
   .pwd-toggle {

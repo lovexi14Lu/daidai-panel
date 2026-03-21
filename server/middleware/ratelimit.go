@@ -67,7 +67,7 @@ func (rl *RateLimiter) Allow(key string) bool {
 func RateLimit(limit int, window time.Duration) gin.HandlerFunc {
 	limiter := NewRateLimiter(limit, window)
 	return func(c *gin.Context) {
-		ip := c.ClientIP()
+		ip := ResolveClientIP(c)
 		if !limiter.Allow(ip) {
 			c.JSON(http.StatusTooManyRequests, gin.H{"error": "请求过于频繁，请稍后再试"})
 			c.Abort()

@@ -1,5 +1,16 @@
 import request from './request'
 
+export interface MirrorsResponse {
+  pip_mirror: string
+  npm_mirror: string
+  linux_mirror: string
+  linux_package_manager: string
+  linux_distribution: string
+  linux_mirror_supported: boolean
+  linux_mirror_label: string
+  linux_mirror_message: string
+}
+
 export const depsApi = {
   list(type: string) {
     return request.get('/deps', { params: { type } }) as Promise<{ data: any[]; total: number }>
@@ -25,11 +36,15 @@ export const depsApi = {
     return request.put(`/deps/${id}/reinstall`) as Promise<{ message: string }>
   },
 
+  cancel(id: number) {
+    return request.put(`/deps/${id}/cancel`) as Promise<{ message: string }>
+  },
+
   pipList: () => request.get('/deps/pip'),
   npmList: () => request.get('/deps/npm'),
 
   getMirrors() {
-    return request.get('/deps/mirrors') as Promise<{ pip_mirror: string; npm_mirror: string; linux_mirror: string }>
+    return request.get('/deps/mirrors') as Promise<MirrorsResponse>
   },
 
   setMirrors(data: { pip_mirror?: string; npm_mirror?: string; linux_mirror?: string }) {

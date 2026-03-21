@@ -49,7 +49,7 @@
             size="small"
             style="margin: 2px 4px 2px 0"
           >{{ s }}</el-tag>
-          <span v-if="!row.scopes" style="color: var(--el-text-color-secondary)">全部权限</span>
+          <span v-if="!row.scopes" style="color: var(--el-text-color-secondary)">未授权任何范围</span>
         </template>
       </el-table-column>
       <el-table-column prop="rate_limit" label="速率限制" width="100" align="center" />
@@ -83,11 +83,14 @@
             v-model="form.scopesList"
             multiple
             filterable
-            placeholder="留空表示全部权限"
+            placeholder="请选择允许访问的资源范围"
             style="width: 100%"
           >
             <el-option v-for="s in scopeOptions" :key="s.value" :label="s.label" :value="s.value" />
           </el-select>
+          <div style="margin-top: 6px; color: var(--el-text-color-secondary); font-size: 12px">
+            默认拒绝。留空表示该应用创建成功，但没有任何接口访问权限。
+          </div>
         </el-form-item>
         <el-form-item label="速率限制">
           <el-input-number v-model="form.rate_limit" :min="1" :max="10000" />

@@ -2,10 +2,12 @@ package service
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"daidai-panel/database"
 	"daidai-panel/model"
+	"daidai-panel/pkg/netutil"
 
 	"gorm.io/gorm"
 )
@@ -13,6 +15,7 @@ import (
 const (
 	MaxLoginAttempts = 5
 	LockDuration     = 15 * time.Minute
+	CaptchaThreshold = 3
 )
 
 func RecordLoginLog(userID uint, username, ip, userAgent string, status int, message string) {
@@ -44,6 +47,20 @@ func CheckLoginLock(ip, username string) (bool, time.Duration) {
 	}
 
 	return false, 0
+}
+
+func GetLoginAttemptCount(ip, username string) int {
+	var attempt model.LoginAttempt
+	err := database.DB.Where("ip = ? AND username = ?", ip, username).
+		Take(&attempt).Error
+	if err != nil {
+		return 0
+	}
+	return attempt.Count
+}
+
+func ShouldRequireCaptchaByAttempts(failedAttempts int) bool {
+	return failedAttempts >= CaptchaThreshold
 }
 
 func RecordFailedLogin(ip, username string) int {
@@ -84,41 +101,119 @@ func CleanExpiredAttempts() {
 	database.DB.Where("expires_at < ?", time.Now()).Delete(&model.LoginAttempt{})
 }
 
-func CreateSession(userID uint, username, jti, ip, userAgent string, expiresAt time.Time) {
+func CreateSessionWithRefresh(userID uint, username, accessJTI, refreshJTI, ip, userAgent string, accessExpiresAt, refreshExpiresAt time.Time) {
+	var refreshExpiryPtr *time.Time
+	if !refreshExpiresAt.IsZero() {
+		refreshExpiryPtr = &refreshExpiresAt
+	}
+
 	session := model.UserSession{
-		UserID:    userID,
-		Username:  username,
-		JTI:       jti,
-		IP:        ip,
-		UserAgent: userAgent,
-		ExpiresAt: expiresAt,
+		UserID:           userID,
+		Username:         username,
+		JTI:              accessJTI,
+		RefreshJTI:       refreshJTI,
+		IP:               ip,
+		UserAgent:        userAgent,
+		ExpiresAt:        accessExpiresAt,
+		RefreshExpiresAt: refreshExpiryPtr,
 	}
 	database.DB.Create(&session)
 }
 
+func CreateSession(userID uint, username, jti, ip, userAgent string, expiresAt time.Time) {
+	CreateSessionWithRefresh(userID, username, jti, "", ip, userAgent, expiresAt, time.Time{})
+}
+
+func blockToken(jti, tokenType string, userID *uint, expiresAt time.Time) {
+	if jti == "" {
+		return
+	}
+	if expiresAt.IsZero() {
+		expiresAt = time.Now().Add(24 * time.Hour)
+	}
+
+	var existing model.TokenBlocklist
+	if err := database.DB.Where("jti = ?", jti).First(&existing).Error; err == nil {
+		return
+	}
+
+	database.DB.Create(&model.TokenBlocklist{
+		JTI:       jti,
+		TokenType: tokenType,
+		UserID:    userID,
+		RevokedAt: time.Now(),
+		ExpiresAt: expiresAt,
+	})
+}
+
+func BlockSessionTokens(session *model.UserSession) {
+	if session == nil {
+		return
+	}
+	userID := session.UserID
+	blockToken(session.JTI, "access", &userID, session.ExpiresAt)
+	if session.RefreshExpiresAt != nil {
+		blockToken(session.RefreshJTI, "refresh", &userID, *session.RefreshExpiresAt)
+	}
+}
+
 func RevokeSession(jti string) {
-	database.DB.Where("jti = ?", jti).Delete(&model.UserSession{})
+	var session model.UserSession
+	if err := database.DB.Where("jti = ?", jti).First(&session).Error; err == nil {
+		BlockSessionTokens(&session)
+		database.DB.Delete(&session)
+		return
+	}
+
+	blockToken(jti, "access", nil, time.Now().Add(24*time.Hour))
 }
 
 func RevokeAllUserSessions(userID uint) int64 {
+	var sessions []model.UserSession
+	database.DB.Where("user_id = ?", userID).Find(&sessions)
+	for i := range sessions {
+		BlockSessionTokens(&sessions[i])
+	}
+
 	result := database.DB.Where("user_id = ?", userID).Delete(&model.UserSession{})
 	return result.RowsAffected
 }
 
+func RevokeOtherUserSessions(userID uint, currentJTI string) int64 {
+	var sessions []model.UserSession
+	database.DB.Where("user_id = ? AND jti != ?", userID, currentJTI).Find(&sessions)
+	for i := range sessions {
+		BlockSessionTokens(&sessions[i])
+	}
+
+	result := database.DB.Where("user_id = ? AND jti != ?", userID, currentJTI).Delete(&model.UserSession{})
+	return result.RowsAffected
+}
+
 func CleanExpiredSessions() {
-	database.DB.Where("expires_at < ?", time.Now()).Delete(&model.UserSession{})
+	now := time.Now()
+	database.DB.Where("(refresh_expires_at IS NOT NULL AND refresh_expires_at < ?) OR (refresh_expires_at IS NULL AND expires_at < ?)", now, now).Delete(&model.UserSession{})
 }
 
 func IsIPWhitelisted(ip string) bool {
-	var count int64
-	database.DB.Model(&model.IPWhitelist{}).Count(&count)
-	if count == 0 {
+	ip = strings.TrimSpace(ip)
+	if ip == "" {
+		return false
+	}
+
+	var whitelist []model.IPWhitelist
+	database.DB.Order("id ASC").Find(&whitelist)
+	if len(whitelist) == 0 {
 		return true
 	}
 
-	var match int64
-	database.DB.Model(&model.IPWhitelist{}).Where("ip = ?", ip).Count(&match)
-	return match > 0
+	for _, entry := range whitelist {
+		if netutil.MatchIPWhitelistEntry(entry.IP, ip) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func RecordSecurityAudit(userID *uint, username, action, detail, ip string) {

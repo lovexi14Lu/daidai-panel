@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { subscriptionApi } from '@/api/subscription'
 import { sshKeyApi } from '@/api/notification'
-import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { openAuthorizedEventStream, type EventStreamConnection } from '@/utils/sse'
 
 const subList = ref<any[]>([])
 const loading = ref(false)
@@ -51,7 +51,7 @@ const showPullLog = ref(false)
 const pullLogLines = ref<string[]>([])
 const pullRunning = ref(false)
 const pullingSubId = ref<number | null>(null)
-let pullEventSource: EventSource | null = null
+let pullEventSource: EventStreamConnection | null = null
 const pullLogRef = ref<HTMLElement>()
 let pullBuffer: string[] = []
 let pullFlushRaf = 0
@@ -232,24 +232,35 @@ async function handleToggle(row: any) {
   }
 }
 
-async function handlePull(id: number) {
-  if (pullingSubId.value === id && pullRunning.value) {
+async function handlePull(row: any) {
+  if (pullingSubId.value === row.id && pullRunning.value) {
     showPullLog.value = true
     return
   }
+
   try {
-    await subscriptionApi.pull(id)
+    await ElMessageBox.confirm(
+      `确认立即拉取订阅「${row.name}」吗？`,
+      '拉取确认',
+      { type: 'warning', confirmButtonText: '立即拉取', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+
+  try {
+    await subscriptionApi.pull(row.id)
     pullLogLines.value = []
     pullRunning.value = true
-    pullingSubId.value = id
+    pullingSubId.value = row.id
     showPullLog.value = true
-    connectPullStream(id)
+    connectPullStream(row.id)
   } catch (err: any) {
     if (err?.response?.data?.error?.includes('拉取中')) {
       pullRunning.value = true
-      pullingSubId.value = id
+      pullingSubId.value = row.id
       showPullLog.value = true
-      connectPullStream(id)
+      connectPullStream(row.id)
       return
     }
     ElMessage.error(err?.response?.data?.error || '拉取失败')
@@ -258,31 +269,33 @@ async function handlePull(id: number) {
 
 function connectPullStream(id: number) {
   closePullStream()
-  const auth = useAuthStore()
   const base = import.meta.env.VITE_API_BASE || '/api/v1'
-  const url = `${base}/subscriptions/${id}/pull-stream?token=${auth.accessToken}`
-  pullEventSource = new EventSource(url)
-  pullEventSource.onmessage = (e) => {
-    pullBuffer.push(e.data)
-    if (!pullFlushRaf) {
-      pullFlushRaf = requestAnimationFrame(() => {
-        pullLogLines.value.push(...pullBuffer)
-        pullBuffer = []
-        pullFlushRaf = 0
-        if (pullLogRef.value) pullLogRef.value.scrollTop = pullLogRef.value.scrollHeight
-      })
+  const url = `${base}/subscriptions/${id}/pull-stream`
+  pullEventSource = openAuthorizedEventStream(url, {
+    onMessage(data) {
+      pullBuffer.push(data)
+      if (!pullFlushRaf) {
+        pullFlushRaf = requestAnimationFrame(() => {
+          pullLogLines.value.push(...pullBuffer)
+          pullBuffer = []
+          pullFlushRaf = 0
+          if (pullLogRef.value) pullLogRef.value.scrollTop = pullLogRef.value.scrollHeight
+        })
+      }
+    },
+    onEvent(event) {
+      if (event.event === 'done') {
+        pullRunning.value = false
+        pullingSubId.value = null
+        closePullStream()
+        loadData()
+      }
+    },
+    onError() {
+      pullRunning.value = false
+      closePullStream()
     }
-  }
-  pullEventSource.addEventListener('done', () => {
-    pullRunning.value = false
-    pullingSubId.value = null
-    closePullStream()
-    loadData()
   })
-  pullEventSource.onerror = () => {
-    pullRunning.value = false
-    closePullStream()
-  }
 }
 
 function closePullStream() {
@@ -406,7 +419,7 @@ function viewLogDetail(log: any) {
         <template #default="{ row }">
           <div class="action-group">
             <el-tooltip content="拉取" placement="top">
-              <el-button size="small" type="success" plain circle @click="handlePull(row.id)">
+              <el-button size="small" type="success" plain circle @click="handlePull(row)">
                 <el-icon><Download /></el-icon>
               </el-button>
             </el-tooltip>

@@ -340,12 +340,12 @@ panel.add_or_update_env(
       {
         id: 'auth-me',
         method: 'GET',
-        path: '/api/auth/me',
+        path: '/api/auth/user',
         title: '获取当前用户信息',
         description: '获取当前登录用户的详细信息',
         auth: 'jwt',
         responseExample: JSON.stringify({
-          data: { id: 1, username: 'admin', role: 'admin', created_at: '2026-01-01T00:00:00' },
+          user: { id: 1, username: 'admin', role: 'admin', enabled: true, created_at: '2026-01-01T00:00:00' },
         }, null, 2),
       },
       {
@@ -380,7 +380,7 @@ panel.add_or_update_env(
           { name: 'page_size', type: 'integer', description: '每页数量，默认 20', example: '20' },
         ],
         responseExample: JSON.stringify({
-          data: [{ id: 1, name: '签到任务', command: 'sign.py', schedule: '0 9 * * *', status: 1, last_run_status: 0, last_run_at: '2026-03-10T09:00:00' }],
+          data: [{ id: 1, name: '签到任务', command: 'task sign.py', cron_expression: '0 9 * * *', status: 1, last_run_status: 0, last_run_at: '2026-03-10T09:00:00' }],
           total: 1, page: 1, page_size: 20,
         }, null, 2),
       },
@@ -393,8 +393,8 @@ panel.add_or_update_env(
         auth: 'jwt',
         bodyParams: [
           { name: 'name', type: 'string', required: true, description: '任务名称', example: '签到任务' },
-          { name: 'command', type: 'string', required: true, description: '执行脚本', example: 'sign.py' },
-          { name: 'schedule', type: 'string', required: true, description: 'Cron 表达式', example: '0 9 * * *' },
+          { name: 'command', type: 'string', required: true, description: '执行命令', example: 'task sign.py' },
+          { name: 'cron_expression', type: 'string', required: true, description: 'Cron 表达式', example: '0 9 * * *' },
           { name: 'timeout', type: 'integer', description: '超时时间（秒）', example: '300' },
           { name: 'max_retries', type: 'integer', description: '最大重试次数', example: '0' },
           { name: 'retry_interval', type: 'integer', description: '重试间隔（秒）', example: '5' },
@@ -412,9 +412,11 @@ panel.add_or_update_env(
         pathParams: [{ name: 'id', type: 'integer', required: true, description: '任务 ID' }],
         bodyParams: [
           { name: 'name', type: 'string', description: '任务名称' },
-          { name: 'command', type: 'string', description: '执行脚本' },
-          { name: 'schedule', type: 'string', description: 'Cron 表达式' },
-          { name: 'status', type: 'integer', description: '状态：1=启用, 0=禁用' },
+          { name: 'command', type: 'string', description: '执行命令' },
+          { name: 'cron_expression', type: 'string', description: 'Cron 表达式' },
+          { name: 'timeout', type: 'integer', description: '超时时间（秒）' },
+          { name: 'max_retries', type: 'integer', description: '最大重试次数' },
+          { name: 'retry_interval', type: 'integer', description: '重试间隔（秒）' },
         ],
         responseExample: JSON.stringify({ message: '更新成功' }, null, 2),
       },
@@ -430,7 +432,7 @@ panel.add_or_update_env(
       },
       {
         id: 'tasks-run',
-        method: 'POST',
+        method: 'PUT',
         path: '/api/tasks/:id/run',
         title: '立即执行任务',
         description: '立即触发执行指定任务',
@@ -440,7 +442,7 @@ panel.add_or_update_env(
       },
       {
         id: 'tasks-stop',
-        method: 'POST',
+        method: 'PUT',
         path: '/api/tasks/:id/stop',
         title: '停止任务',
         description: '停止正在执行的任务',
@@ -480,7 +482,7 @@ panel.add_or_update_env(
         auth: 'jwt',
         pathParams: [{ name: 'id', type: 'integer', required: true, description: '日志 ID' }],
         responseExample: JSON.stringify({
-          data: { id: 1, task_id: 1, task_name: '签到任务', status: 0, content: '签到成功\n获得 10 积分', duration: 2.5, started_at: '2026-03-10T09:00:00', ended_at: '2026-03-10T09:00:02' },
+          id: 1, task_id: 1, task_name: '签到任务', status: 0, content: '签到成功\n获得 10 积分', duration: 2.5, started_at: '2026-03-10T09:00:00', ended_at: '2026-03-10T09:00:02',
         }, null, 2),
       },
       {
@@ -511,22 +513,24 @@ panel.add_or_update_env(
       {
         id: 'scripts-content',
         method: 'GET',
-        path: '/api/scripts/content/:path',
+        path: '/api/scripts/content?path=:path',
         title: '获取脚本内容',
         description: '获取指定脚本的文件内容',
         auth: 'jwt',
-        pathParams: [{ name: 'path', type: 'string', required: true, description: '脚本路径', example: 'sign.py' }],
-        responseExample: JSON.stringify({ data: { path: 'sign.py', content: 'print("hello")', size: 15 } }, null, 2),
+        queryParams: [{ name: 'path', type: 'string', required: true, description: '脚本路径', example: 'sign.py' }],
+        responseExample: JSON.stringify({ data: { path: 'sign.py', content: 'print("hello")', binary: false, is_binary: false } }, null, 2),
       },
       {
         id: 'scripts-save',
         method: 'PUT',
-        path: '/api/scripts/content/:path',
+        path: '/api/scripts/content',
         title: '保存脚本内容',
         description: '创建或更新脚本文件',
         auth: 'jwt',
-        pathParams: [{ name: 'path', type: 'string', required: true, description: '脚本路径' }],
-        bodyParams: [{ name: 'content', type: 'string', required: true, description: '脚本内容' }],
+        bodyParams: [
+          { name: 'path', type: 'string', required: true, description: '脚本路径' },
+          { name: 'content', type: 'string', required: true, description: '脚本内容' },
+        ],
         responseExample: JSON.stringify({ message: '保存成功' }, null, 2),
       },
       {
@@ -672,7 +676,7 @@ panel.add_or_update_env(
       },
       {
         id: 'subs-pull',
-        method: 'POST',
+        method: 'PUT',
         path: '/api/subscriptions/:id/pull',
         title: '手动拉取订阅',
         description: '立即拉取指定订阅的脚本',
@@ -700,7 +704,7 @@ panel.add_or_update_env(
         method: 'POST',
         path: '/api/notifications',
         title: '创建通知渠道',
-        description: '创建新的通知渠道，支持：webhook / email / telegram / dingtalk / wecom / bark / pushplus / serverchan / feishu',
+        description: '创建新的通知渠道，支持：webhook / email / telegram / dingtalk / wecom / bark / pushplus / serverchan / feishu / gotify / pushdeer / pushme / chanify / igot / qmsg / pushover / discord / slack / ntfy / wxpusher / custom',
         auth: 'jwt',
         bodyParams: [
           { name: 'name', type: 'string', required: true, description: '渠道名称' },
@@ -746,62 +750,60 @@ panel.add_or_update_env(
     label: '依赖管理',
     endpoints: [
       {
-        id: 'deps-python-list',
+        id: 'deps-list',
         method: 'GET',
-        path: '/api/deps/python',
-        title: '获取 Python 依赖列表',
-        description: '获取已安装的 Python 包列表',
+        path: '/api/deps',
+        title: '获取依赖列表',
+        description: '按类型获取依赖列表',
         auth: 'jwt',
-        responseExample: JSON.stringify({ data: [{ name: 'requests', version: '2.31.0' }] }, null, 2),
+        queryParams: [
+          { name: 'type', type: 'string', required: true, description: '依赖类型：nodejs / python / linux', example: 'python' },
+        ],
+        responseExample: JSON.stringify({ data: [{ id: 1, type: 'python', name: 'requests', status: 'installed' }], total: 1 }, null, 2),
       },
       {
-        id: 'deps-python-install',
+        id: 'deps-create',
         method: 'POST',
-        path: '/api/deps/python/install',
-        title: '安装 Python 包',
-        description: '安装指定的 Python 包',
+        path: '/api/deps',
+        title: '安装依赖',
+        description: '按类型批量提交依赖安装任务',
         auth: 'jwt',
-        bodyParams: [{ name: 'name', type: 'string', required: true, description: '包名', example: 'requests' }],
-        responseExample: JSON.stringify({ message: '安装成功' }, null, 2),
+        bodyParams: [
+          { name: 'type', type: 'string', required: true, description: '依赖类型', example: 'python' },
+          { name: 'names', type: 'array', required: true, description: '依赖名称数组', example: '["requests"]' },
+        ],
+        responseExample: JSON.stringify({ message: '已提交 1 个依赖安装', data: [{ id: 1, type: 'python', name: 'requests', status: 'installing' }] }, null, 2),
       },
       {
-        id: 'deps-python-uninstall',
-        method: 'POST',
-        path: '/api/deps/python/uninstall',
-        title: '卸载 Python 包',
-        description: '卸载指定的 Python 包',
+        id: 'deps-delete',
+        method: 'DELETE',
+        path: '/api/deps/:id',
+        title: '卸载依赖',
+        description: '卸载指定依赖，支持 force 强制卸载',
         auth: 'jwt',
-        bodyParams: [{ name: 'name', type: 'string', required: true, description: '包名' }],
-        responseExample: JSON.stringify({ message: '卸载成功' }, null, 2),
+        pathParams: [{ name: 'id', type: 'integer', required: true, description: '依赖 ID' }],
+        queryParams: [{ name: 'force', type: 'boolean', description: '是否强制卸载', example: 'true' }],
+        responseExample: JSON.stringify({ message: '卸载中' }, null, 2),
       },
       {
-        id: 'deps-node-list',
+        id: 'deps-status',
         method: 'GET',
-        path: '/api/deps/node',
-        title: '获取 Node 依赖列表',
-        description: '获取已安装的 Node 包列表',
+        path: '/api/deps/:id/status',
+        title: '获取依赖状态',
+        description: '获取单个依赖的状态和日志',
         auth: 'jwt',
-        responseExample: JSON.stringify({ data: [{ name: 'axios', version: '1.6.0' }] }, null, 2),
+        pathParams: [{ name: 'id', type: 'integer', required: true, description: '依赖 ID' }],
+        responseExample: JSON.stringify({ data: { id: 1, type: 'python', name: 'requests', status: 'installed', log: 'install ok' } }, null, 2),
       },
       {
-        id: 'deps-node-install',
-        method: 'POST',
-        path: '/api/deps/node/install',
-        title: '安装 Node 包',
-        description: '安装指定的 Node 包',
+        id: 'deps-reinstall',
+        method: 'PUT',
+        path: '/api/deps/:id/reinstall',
+        title: '重新安装依赖',
+        description: '重新安装指定依赖',
         auth: 'jwt',
-        bodyParams: [{ name: 'name', type: 'string', required: true, description: '包名', example: 'axios' }],
-        responseExample: JSON.stringify({ message: '安装成功' }, null, 2),
-      },
-      {
-        id: 'deps-node-uninstall',
-        method: 'POST',
-        path: '/api/deps/node/uninstall',
-        title: '卸载 Node 包',
-        description: '卸载指定的 Node 包',
-        auth: 'jwt',
-        bodyParams: [{ name: 'name', type: 'string', required: true, description: '包名' }],
-        responseExample: JSON.stringify({ message: '卸载成功' }, null, 2),
+        pathParams: [{ name: 'id', type: 'integer', required: true, description: '依赖 ID' }],
+        responseExample: JSON.stringify({ message: '重新安装中' }, null, 2),
       },
     ],
   },
@@ -866,7 +868,7 @@ panel.add_or_update_env(
       {
         id: 'open-apps-list',
         method: 'GET',
-        path: '/api/open/apps',
+        path: '/api/open-api/apps',
         title: '获取应用列表',
         description: '获取所有开放 API 应用',
         auth: 'jwt',
@@ -926,7 +928,7 @@ panel.add_or_update_env(
         description: '获取服务器系统信息（CPU/内存/磁盘等）',
         auth: 'jwt',
         responseExample: JSON.stringify({
-          data: { hostname: 'server', os: 'linux', arch: 'amd64', go_version: 'go1.22.0', num_cpu: 4, cpu_percent: 25.0, memory_total: 8589934592, memory_used: 4294967296, memory_percent: 50.0, disk_total: 107374182400, disk_used: 53687091200, disk_percent: 50.0 },
+          data: { hostname: 'server', os: 'linux', arch: 'amd64', go_version: 'go1.22.0', num_cpu: 4, cpu_usage: 25.0, memory_total: 8589934592, memory_used: 4294967296, memory_usage: 50.0, disk_total: 107374182400, disk_used: 53687091200, disk_usage: 50.0 },
         }, null, 2),
       },
       {
@@ -937,7 +939,7 @@ panel.add_or_update_env(
         description: '获取任务、日志、脚本的统计数据',
         auth: 'jwt',
         responseExample: JSON.stringify({
-          data: { tasks: { total: 10, enabled: 8, disabled: 2, running: 1 }, logs: { total: 100, success: 90, failed: 10, success_rate: 90.0 }, scripts_count: 15 },
+          data: { tasks: { total: 10, enabled: 8, disabled: 2, running: 1 }, logs: { total: 100, success: 90, failed: 10, success_rate: 90.0 }, scripts: { total: 15 } },
         }, null, 2),
       },
     ],
@@ -946,16 +948,28 @@ panel.add_or_update_env(
 
 export function generateCodeExamples(endpoint: ApiEndpoint): Record<string, string> {
   const { method, path, bodyParams, auth } = endpoint
-  const url = `http://localhost:5701${path}`
+  const url = `${getApiBaseOrigin()}${path}`
   const hasBody = bodyParams && bodyParams.length > 0 && method !== 'GET'
 
   const bodyObj: Record<string, any> = {}
   if (hasBody) {
     bodyParams!.forEach(p => {
       if (p.example) {
-        bodyObj[p.name] = p.type === 'integer' ? Number(p.example) : p.type === 'boolean' ? p.example === 'true' : p.example
+        if (p.type === 'integer') {
+          bodyObj[p.name] = Number(p.example)
+        } else if (p.type === 'boolean') {
+          bodyObj[p.name] = p.example === 'true'
+        } else if (p.type === 'array' || p.type === 'object') {
+          try {
+            bodyObj[p.name] = JSON.parse(p.example)
+          } catch {
+            bodyObj[p.name] = p.example
+          }
+        } else {
+          bodyObj[p.name] = p.example
+        }
       } else {
-        bodyObj[p.name] = p.type === 'integer' ? 0 : p.type === 'boolean' ? false : ''
+        bodyObj[p.name] = p.type === 'integer' ? 0 : p.type === 'boolean' ? false : p.type === 'array' ? [] : p.type === 'object' ? {} : ''
       }
     })
   }
@@ -984,4 +998,11 @@ export function generateCodeExamples(endpoint: ApiEndpoint): Record<string, stri
   python += `print(res.json())`
 
   return { Shell: shell, JavaScript: js, Python: python }
+}
+
+export function getApiBaseOrigin(): string {
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return window.location.origin
+  }
+  return 'http://localhost:5701'
 }

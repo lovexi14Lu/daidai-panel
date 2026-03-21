@@ -35,14 +35,14 @@ func (l *LoginLog) ToDict() map[string]interface{} {
 }
 
 type LoginAttempt struct {
-	ID        uint      `gorm:"primarykey" json:"id"`
-	IP        string    `gorm:"size:64;index" json:"ip"`
-	Username  string    `gorm:"size:64" json:"username"`
-	Count     int       `gorm:"default:1" json:"count"`
+	ID        uint       `gorm:"primarykey" json:"id"`
+	IP        string     `gorm:"size:64;index" json:"ip"`
+	Username  string     `gorm:"size:64" json:"username"`
+	Count     int        `gorm:"default:1" json:"count"`
 	LockedAt  *time.Time `json:"locked_at"`
-	ExpiresAt time.Time `json:"expires_at"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ExpiresAt time.Time  `json:"expires_at"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 }
 
 func (LoginAttempt) TableName() string {
@@ -50,14 +50,16 @@ func (LoginAttempt) TableName() string {
 }
 
 type UserSession struct {
-	ID        uint      `gorm:"primarykey" json:"id"`
-	UserID    uint      `gorm:"index" json:"user_id"`
-	Username  string    `gorm:"size:64" json:"username"`
-	JTI       string    `gorm:"size:36;uniqueIndex" json:"jti"`
-	IP        string    `gorm:"size:64" json:"ip"`
-	UserAgent string    `gorm:"size:512" json:"user_agent"`
-	ExpiresAt time.Time `json:"expires_at"`
-	CreatedAt time.Time `json:"created_at"`
+	ID               uint       `gorm:"primarykey" json:"id"`
+	UserID           uint       `gorm:"index" json:"user_id"`
+	Username         string     `gorm:"size:64" json:"username"`
+	JTI              string     `gorm:"size:36;uniqueIndex" json:"jti"`
+	RefreshJTI       string     `gorm:"size:36" json:"-"`
+	IP               string     `gorm:"size:64" json:"ip"`
+	UserAgent        string     `gorm:"size:512" json:"user_agent"`
+	ExpiresAt        time.Time  `json:"expires_at"`
+	RefreshExpiresAt *time.Time `json:"-"`
+	CreatedAt        time.Time  `json:"created_at"`
 }
 
 func (UserSession) TableName() string {

@@ -121,7 +121,7 @@ func (h *SubscriptionHandler) List(c *gin.Context) {
 
 	if keyword != "" {
 		like := "%" + keyword + "%"
-		query = query.Where("name ILIKE ? OR url ILIKE ?", like, like)
+		query = query.Where("name LIKE ? OR url LIKE ?", like, like)
 	}
 	if subType != "" {
 		query = query.Where("type = ?", subType)
@@ -166,6 +166,10 @@ func (h *SubscriptionHandler) Create(c *gin.Context) {
 	if req.Type == "" {
 		req.Type = model.SubTypeGitRepo
 	}
+	if !service.ValidateSubscriptionSchedule(req.Schedule) {
+		response.BadRequest(c, "无效的订阅定时规则")
+		return
+	}
 
 	sub := model.Subscription{
 		Name:        req.Name,
@@ -186,6 +190,11 @@ func (h *SubscriptionHandler) Create(c *gin.Context) {
 
 	if err := database.DB.Create(&sub).Error; err != nil {
 		response.InternalError(c, "创建订阅失败")
+		return
+	}
+
+	if err := service.GetSubscriptionScheduler().AddOrUpdateJob(&sub); err != nil {
+		response.InternalError(c, "创建订阅成功，但定时调度注册失败")
 		return
 	}
 
@@ -220,16 +229,28 @@ func (h *SubscriptionHandler) Update(c *gin.Context) {
 		}
 	}
 
+	if schedule, ok := updates["schedule"].(string); ok {
+		if !service.ValidateSubscriptionSchedule(schedule) {
+			response.BadRequest(c, "无效的订阅定时规则")
+			return
+		}
+	}
+
 	if len(updates) > 0 {
 		database.DB.Model(&sub).Updates(updates)
 	}
 
 	database.DB.First(&sub, subID)
+	if err := service.GetSubscriptionScheduler().AddOrUpdateJob(&sub); err != nil {
+		response.InternalError(c, "更新成功，但定时调度注册失败")
+		return
+	}
 	response.Success(c, gin.H{"message": "更新成功", "data": sub.ToDict()})
 }
 
 func (h *SubscriptionHandler) Delete(c *gin.Context) {
 	subID, _ := strconv.ParseUint(c.Param("id"), 10, 32)
+	service.GetSubscriptionScheduler().RemoveJob(uint(subID))
 	database.DB.Where("id = ?", subID).Delete(&model.Subscription{})
 	database.DB.Where("subscription_id = ?", subID).Delete(&model.SubLog{})
 	response.Success(c, gin.H{"message": "删除成功"})
@@ -244,6 +265,10 @@ func (h *SubscriptionHandler) Enable(c *gin.Context) {
 	}
 	database.DB.Model(&sub).Update("enabled", true)
 	sub.Enabled = true
+	if err := service.GetSubscriptionScheduler().AddOrUpdateJob(&sub); err != nil {
+		response.InternalError(c, "启用成功，但定时调度注册失败")
+		return
+	}
 	response.Success(c, gin.H{"message": "已启用", "data": sub.ToDict()})
 }
 
@@ -256,6 +281,7 @@ func (h *SubscriptionHandler) Disable(c *gin.Context) {
 	}
 	database.DB.Model(&sub).Update("enabled", false)
 	sub.Enabled = false
+	service.GetSubscriptionScheduler().RemoveJob(sub.ID)
 	response.Success(c, gin.H{"message": "已禁用", "data": sub.ToDict()})
 }
 
@@ -267,10 +293,7 @@ func (h *SubscriptionHandler) Pull(c *gin.Context) {
 		return
 	}
 
-	subPullStreamsMu.RLock()
-	_, running := subPullStreams[uint(subID)]
-	subPullStreamsMu.RUnlock()
-	if running {
+	if service.IsSubscriptionPullRunning(uint(subID)) {
 		response.BadRequest(c, "该订阅正在拉取中")
 		return
 	}
@@ -279,7 +302,7 @@ func (h *SubscriptionHandler) Pull(c *gin.Context) {
 
 	go func() {
 		defer removeSubBroadcaster(uint(subID))
-		service.PullSubscriptionWithCallback(&sub, func(line string) {
+		service.ExecuteSubscriptionPull(&sub, func(line string) {
 			broadcaster.broadcast(line)
 		})
 		broadcaster.done()
@@ -290,17 +313,6 @@ func (h *SubscriptionHandler) Pull(c *gin.Context) {
 
 func (h *SubscriptionHandler) PullStream(c *gin.Context) {
 	subID, _ := strconv.ParseUint(c.Param("id"), 10, 32)
-
-	tokenStr := c.Query("token")
-	if tokenStr == "" {
-		c.JSON(401, gin.H{"error": "缺少令牌"})
-		return
-	}
-	claims, err := middleware.ParseToken(tokenStr)
-	if err != nil || claims.TokenType != "access" {
-		c.JSON(401, gin.H{"error": "令牌无效"})
-		return
-	}
 
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
@@ -396,6 +408,9 @@ func (h *SubscriptionHandler) BatchDelete(c *gin.Context) {
 
 	result := database.DB.Where("id IN ?", req.IDs).Delete(&model.Subscription{})
 	database.DB.Where("subscription_id IN ?", req.IDs).Delete(&model.SubLog{})
+	for _, id := range req.IDs {
+		service.GetSubscriptionScheduler().RemoveJob(id)
+	}
 
 	response.Success(c, gin.H{
 		"message": fmt.Sprintf("已删除 %d 个订阅", result.RowsAffected),
@@ -403,7 +418,7 @@ func (h *SubscriptionHandler) BatchDelete(c *gin.Context) {
 }
 
 func (h *SubscriptionHandler) RegisterRoutes(r *gin.RouterGroup) {
-	subs := r.Group("/subscriptions", middleware.JWTAuth())
+	subs := r.Group("/subscriptions", middleware.JWTAuth(), middleware.RequireUserToken(), middleware.RequireRole("operator"))
 	{
 		subs.GET("", h.List)
 		subs.POST("", h.Create)

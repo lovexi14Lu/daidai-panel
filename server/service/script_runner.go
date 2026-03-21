@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"daidai-panel/pkg/pathutil"
 )
 
 type ScriptResult struct {
@@ -175,15 +177,9 @@ func validateCommand(command, scriptsDir string) (string, string, error) {
 		return "", "", fmt.Errorf("不支持的文件扩展名: %s", ext)
 	}
 
-	fullPath := filepath.Join(scriptsDir, scriptPath)
-	fullPath, err := filepath.Abs(fullPath)
+	fullPath, err := pathutil.ResolveWithinBase(scriptsDir, scriptPath, true)
 	if err != nil {
-		return "", "", fmt.Errorf("无效路径: %w", err)
-	}
-
-	absScriptsDir, _ := filepath.Abs(scriptsDir)
-	if !strings.HasPrefix(fullPath, absScriptsDir) {
-		return "", "", fmt.Errorf("检测到路径遍历攻击")
+		return "", "", err
 	}
 
 	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
@@ -293,14 +289,11 @@ func RunInlineScript(content, scriptsDir string, envVars map[string]string, time
 }
 
 func RunHookScript(scriptName, scriptsDir string, envVars map[string]string, onOutput OnOutputFunc) {
-	hookPath := filepath.Join(scriptsDir, scriptName)
-	if _, err := os.Stat(hookPath); os.IsNotExist(err) {
+	hookPath, err := pathutil.ResolveWithinBase(scriptsDir, scriptName, true)
+	if os.IsNotExist(err) {
 		return
 	}
-
-	absPath, _ := filepath.Abs(hookPath)
-	absDir, _ := filepath.Abs(scriptsDir)
-	if !strings.HasPrefix(absPath, absDir) {
+	if err != nil {
 		return
 	}
 

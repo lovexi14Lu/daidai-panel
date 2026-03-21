@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { authApi } from '@/api/auth'
 import router from '@/router'
+import type { GeeTestValidateResult } from '@/utils/geetest'
 
 interface User {
   id: number
@@ -39,8 +40,8 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.removeItem('refresh_token')
   }
 
-  async function login(username: string, password: string) {
-    const res = await authApi.login(username, password)
+  async function login(username: string, password: string, totpCode?: string, captcha?: GeeTestValidateResult | null) {
+    const res = await authApi.login(username, password, totpCode, captcha)
     setTokens(res.access_token, res.refresh_token)
     setUser(res.user)
     return res

@@ -596,7 +596,7 @@ func (h *EnvHandler) BatchSetGroup(c *gin.Context) {
 }
 
 func (h *EnvHandler) RegisterRoutes(r *gin.RouterGroup) {
-	envs := r.Group("/envs", middleware.JWTAuth())
+	envs := r.Group("/envs", middleware.JWTAuth(), middleware.OpenAPIAccess("envs"), middleware.RequireRole("operator"))
 	{
 		envs.GET("", h.List)
 		envs.POST("", h.Create)

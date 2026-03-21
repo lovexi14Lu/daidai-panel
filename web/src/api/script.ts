@@ -10,7 +10,7 @@ export const scriptApi = {
   },
 
   getContent(path: string) {
-    return request.get('/scripts/content', { params: { path } }) as Promise<{ data: { content: string; is_binary: boolean; size: number } }>
+    return request.get('/scripts/content', { params: { path } }) as Promise<{ data: { content: string; binary?: boolean; is_binary?: boolean; size: number } }>
   },
 
   saveContent(path: string, content: string, message?: string) {

@@ -34,11 +34,12 @@ func (d *Dependency) ToDictWithLog() map[string]interface{} {
 }
 
 const (
-	DepTypeNodeJS  = "nodejs"
-	DepTypePython  = "python"
-	DepTypeLinux   = "linux"
+	DepTypeNodeJS       = "nodejs"
+	DepTypePython       = "python"
+	DepTypeLinux        = "linux"
 	DepStatusInstalling = "installing"
 	DepStatusInstalled  = "installed"
 	DepStatusFailed     = "failed"
 	DepStatusRemoving   = "removing"
+	DepStatusCancelled  = "cancelled"
 )

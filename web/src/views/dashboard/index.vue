@@ -37,7 +37,7 @@
               <span class="title-sub">最近7天任务执行情况</span>
             </div>
           </template>
-          <div ref="trendChartRef" style="height: 280px"></div>
+          <ExecutionTrendChart :stats="dashboardData.daily_stats || []" />
         </el-card>
       </el-col>
     </el-row>
@@ -120,17 +120,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick, defineComponent, h, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, defineComponent, h, watch, defineAsyncComponent } from 'vue'
 import { systemApi } from '@/api/system'
 import {
   Timer, Check, ArrowRight, VideoPlay,
 } from '@element-plus/icons-vue'
-import * as echarts from 'echarts/core'
-import { LineChart } from 'echarts/charts'
-import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
-import { CanvasRenderer } from 'echarts/renderers'
 
-echarts.use([LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
+const ExecutionTrendChart = defineAsyncComponent(() => import('./components/ExecutionTrendChart.vue'))
 
 const CountUp = defineComponent({
   props: {
@@ -175,18 +171,16 @@ const CountUp = defineComponent({
 
 const dashboardData = ref<any>({})
 const sysInfo = ref<any>({})
-const trendChartRef = ref<HTMLElement>()
-let trendChart: echarts.ECharts | null = null
 
 const recentLogs = computed(() => dashboardData.value.recent_logs || [])
 
 const statCards = computed(() => {
   const d = dashboardData.value
   return [
-    { label: '任务总数', value: d.task_count || 0, icon: 'Timer', color: '#409EFF', bg: 'linear-gradient(135deg, #e6f4ff, #f0f5ff)', link: '/tasks' },
-    { label: '正在运行', value: d.running_tasks || 0, icon: 'VideoPlay', color: '#E6A23C', bg: 'linear-gradient(135deg, #fffbe6, #fff1b8)', link: '/tasks' },
-    { label: '今日执行', value: d.today_logs || 0, icon: 'Check', color: '#fa541c', bg: 'linear-gradient(135deg, #fff2e8, #fff7e6)', link: '/logs' },
-    { label: '成功率', value: d.today_logs ? Math.round((d.success_logs || 0) / d.today_logs * 100) : 0, icon: 'Check', color: '#67C23A', bg: 'linear-gradient(135deg, #f6ffed, #fcffe6)', link: '/logs' },
+    { label: '任务总数', value: d.task_count || 0, icon: Timer, color: '#409EFF', bg: 'linear-gradient(135deg, #e6f4ff, #f0f5ff)', link: '/tasks' },
+    { label: '正在运行', value: d.running_tasks || 0, icon: VideoPlay, color: '#E6A23C', bg: 'linear-gradient(135deg, #fffbe6, #fff1b8)', link: '/tasks' },
+    { label: '今日执行', value: d.today_logs || 0, icon: Check, color: '#fa541c', bg: 'linear-gradient(135deg, #fff2e8, #fff7e6)', link: '/logs' },
+    { label: '成功率', value: d.today_logs ? Math.round((d.success_logs || 0) / d.today_logs * 100) : 0, icon: Check, color: '#67C23A', bg: 'linear-gradient(135deg, #f6ffed, #fcffe6)', link: '/logs' },
   ]
 })
 
@@ -213,37 +207,10 @@ const formatBytes = (bytes: number) => {
   return val.toFixed(1) + ' ' + units[i]
 }
 
-const renderTrendChart = () => {
-  if (!trendChartRef.value) return
-  const stats = dashboardData.value.daily_stats || []
-  if (!trendChart) trendChart = echarts.init(trendChartRef.value)
-  trendChart.setOption({
-    tooltip: {
-      trigger: 'axis',
-      backgroundColor: '#fff',
-      borderColor: '#f0f0f0',
-      borderWidth: 1,
-      textStyle: { color: '#333', fontSize: 12 },
-      extraCssText: 'border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);',
-    },
-    legend: { data: ['执行总数', '成功', '失败'], icon: 'circle', itemWidth: 8, textStyle: { fontSize: 12, color: '#8c8c8c' }, top: 0 },
-    grid: { left: '3%', right: '4%', bottom: '3%', top: 40, containLabel: true },
-    xAxis: { type: 'category', data: stats.map((s: any) => s.date), axisLine: { lineStyle: { color: '#f0f0f0' } }, axisTick: { show: false }, axisLabel: { color: '#8c8c8c', fontSize: 11 } },
-    yAxis: { type: 'value', minInterval: 1, axisLine: { lineStyle: { color: '#f0f0f0' } }, splitLine: { lineStyle: { color: '#f5f5f5' } }, axisLabel: { color: '#8c8c8c', fontSize: 11 } },
-    series: [
-      { name: '执行总数', type: 'line', data: stats.map((s: any) => (s.success || 0) + (s.failed || 0)), smooth: 0.6, symbol: 'circle', symbolSize: 7, lineStyle: { width: 2.5, color: '#409EFF' }, itemStyle: { color: '#409EFF', borderWidth: 2, borderColor: '#fff' }, areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: 'rgba(64,158,255,0.2)' }, { offset: 1, color: 'rgba(64,158,255,0)' }]) } },
-      { name: '成功', type: 'line', data: stats.map((s: any) => s.success || 0), smooth: 0.6, symbol: 'circle', symbolSize: 7, lineStyle: { width: 2.5, color: '#67C23A' }, itemStyle: { color: '#67C23A', borderWidth: 2, borderColor: '#fff' }, areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: 'rgba(103,194,58,0.15)' }, { offset: 1, color: 'rgba(103,194,58,0)' }]) } },
-      { name: '失败', type: 'line', data: stats.map((s: any) => s.failed || 0), smooth: 0.6, symbol: 'circle', symbolSize: 7, lineStyle: { width: 2.5, color: '#F56C6C' }, itemStyle: { color: '#F56C6C', borderWidth: 2, borderColor: '#fff' } },
-    ],
-  })
-}
-
 const loadDashboard = async () => {
   try {
     const res = await systemApi.dashboard() as any
     dashboardData.value = res.data || {}
-    await nextTick()
-    renderTrendChart()
   } catch {}
 }
 
@@ -254,18 +221,9 @@ const loadSysInfo = async () => {
   } catch {}
 }
 
-let resizeHandler: () => void
-
 onMounted(() => {
   loadDashboard()
   loadSysInfo()
-  resizeHandler = () => { trendChart?.resize() }
-  window.addEventListener('resize', resizeHandler)
-})
-
-onUnmounted(() => {
-  window.removeEventListener('resize', resizeHandler)
-  trendChart?.dispose()
 })
 </script>
 

@@ -72,18 +72,6 @@ func (h *LogHandler) Stream(c *gin.Context) {
 	taskIDStr := c.Param("id")
 	taskID, _ := strconv.ParseUint(taskIDStr, 10, 32)
 
-	tokenStr := c.Query("token")
-	if tokenStr == "" {
-		c.JSON(401, gin.H{"error": "缺少令牌"})
-		return
-	}
-
-	claims, err := middleware.ParseToken(tokenStr)
-	if err != nil || claims.TokenType != "access" {
-		c.JSON(401, gin.H{"error": "令牌无效"})
-		return
-	}
-
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
@@ -219,28 +207,29 @@ func (h *LogHandler) BatchDelete(c *gin.Context) {
 }
 
 func (h *LogHandler) Clean(c *gin.Context) {
-	daysStr := c.DefaultQuery("days", "7")
+	defaultDays := model.GetRegisteredConfigInt("log_retention_days")
+	daysStr := c.DefaultQuery("days", strconv.Itoa(defaultDays))
 	days, _ := strconv.Atoi(daysStr)
 	if days < 1 {
-		days = 7
+		days = defaultDays
 	}
 
 	cutoff := time.Now().AddDate(0, 0, -days)
 	result := database.DB.Where("started_at < ?", cutoff).Delete(&model.TaskLog{})
 	response.Success(c, gin.H{
-		"message": fmt.Sprintf("已清理 %d 条日志", result.RowsAffected),
+		"message": fmt.Sprintf("已清理 %d 条日志（保留最近 %d 天）", result.RowsAffected, days),
 	})
 }
 
 func (h *LogHandler) RegisterRoutes(r *gin.RouterGroup) {
 	logs := r.Group("/logs")
 	{
-		logs.GET("", middleware.JWTAuth(), h.List)
-		logs.DELETE("/batch", middleware.JWTAuth(), h.BatchDelete)
-		logs.POST("/batch-delete", middleware.JWTAuth(), h.BatchDelete)
-		logs.DELETE("/clean", middleware.JWTAuth(), h.Clean)
-		logs.GET("/:id/stream", h.Stream)
-		logs.GET("/:id", middleware.JWTAuth(), h.Detail)
-		logs.DELETE("/:id", middleware.JWTAuth(), h.Delete)
+		logs.GET("", middleware.JWTAuth(), middleware.OpenAPIAccess("logs"), middleware.RequireRole("viewer"), h.List)
+		logs.DELETE("/batch", middleware.JWTAuth(), middleware.RequireUserToken(), middleware.RequireRole("operator"), h.BatchDelete)
+		logs.POST("/batch-delete", middleware.JWTAuth(), middleware.RequireUserToken(), middleware.RequireRole("operator"), h.BatchDelete)
+		logs.DELETE("/clean", middleware.JWTAuth(), middleware.RequireUserToken(), middleware.RequireRole("operator"), h.Clean)
+		logs.GET("/:id/stream", middleware.JWTAuth(), middleware.RequireUserToken(), middleware.RequireRole("viewer"), h.Stream)
+		logs.GET("/:id", middleware.JWTAuth(), middleware.OpenAPIAccess("logs"), middleware.RequireRole("viewer"), h.Detail)
+		logs.DELETE("/:id", middleware.JWTAuth(), middleware.RequireUserToken(), middleware.RequireRole("operator"), h.Delete)
 	}
 }

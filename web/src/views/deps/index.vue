@@ -56,6 +56,7 @@
       <el-table-column label="操作" width="250" align="center">
         <template #default="{ row }">
           <el-button type="primary" link size="small" @click="viewLog(row)">日志</el-button>
+          <el-button v-if="row.status === 'installing' || row.status === 'removing'" type="warning" link size="small" @click="handleCancel(row)">取消</el-button>
           <el-button type="warning" link size="small" @click="handleReinstall(row)" :disabled="row.status === 'installing' || row.status === 'removing'">重装</el-button>
           <el-button type="danger" link size="small" @click="handleDelete(row)" :disabled="row.status === 'installing' || row.status === 'removing'">卸载</el-button>
           <el-button type="danger" link size="small" @click="handleForceDelete(row)" :disabled="row.status === 'installing' || row.status === 'removing'">强制卸载</el-button>
@@ -85,11 +86,23 @@
       </template>
     </el-dialog>
     <el-dialog v-model="showLogDialog" title="安装日志" width="70%">
-      <div style="margin-bottom: 8px">
-        <el-tag v-if="!logDone" type="warning" size="small" class="running-tag">
-          <span class="spinner"></span> 执行中
-        </el-tag>
-        <el-tag v-else type="success" size="small">已完成</el-tag>
+      <div class="log-dialog-toolbar">
+        <div>
+          <el-tag v-if="!logDone" type="warning" size="small" class="running-tag">
+            <span class="spinner"></span> 执行中
+          </el-tag>
+          <el-tag v-else-if="currentLogRow?.status === 'cancelled'" type="info" size="small">已取消</el-tag>
+          <el-tag v-else type="success" size="small">已完成</el-tag>
+        </div>
+        <el-button
+          v-if="currentLogRow && !logDone"
+          type="warning"
+          plain
+          size="small"
+          @click="handleCancel(currentLogRow)"
+        >
+          取消当前任务
+        </el-button>
       </div>
       <pre ref="logContainerRef" class="log-content">{{ logContent || '暂无日志' }}</pre>
     </el-dialog>
@@ -131,24 +144,36 @@
             </template>
           </el-input>
         </el-form-item>
-        <el-form-item label="Linux (apk)">
-          <el-input v-model="mirrorForm.linux_mirror" placeholder="留空使用官方源" clearable>
+        <el-form-item :label="linuxMirrorLabel">
+          <el-input
+            v-model="mirrorForm.linux_mirror"
+            :placeholder="linuxMirrorSupported ? '留空使用官方源' : '当前包管理器暂不支持镜像设置'"
+            :disabled="!linuxMirrorSupported"
+            clearable
+          >
             <template #append>
-              <el-dropdown @command="(v: string) => mirrorForm.linux_mirror = v" trigger="click">
-                <el-button>快捷选择</el-button>
+              <el-dropdown @command="(v: string) => mirrorForm.linux_mirror = v" trigger="click" :disabled="!linuxMirrorSupported || linuxMirrorOptions.length === 0">
+                <el-button :disabled="!linuxMirrorSupported || linuxMirrorOptions.length === 0">快捷选择</el-button>
                 <template #dropdown>
                   <el-dropdown-menu>
-                    <el-dropdown-item command="https://mirrors.tuna.tsinghua.edu.cn/alpine">清华大学</el-dropdown-item>
-                    <el-dropdown-item command="https://mirrors.aliyun.com/alpine">阿里云</el-dropdown-item>
-                    <el-dropdown-item command="https://mirrors.cloud.tencent.com/alpine">腾讯云</el-dropdown-item>
-                    <el-dropdown-item command="https://repo.huaweicloud.com/alpine">华为云</el-dropdown-item>
-                    <el-dropdown-item command="https://mirrors.ustc.edu.cn/alpine">中科大</el-dropdown-item>
+                    <el-dropdown-item
+                      v-for="option in linuxMirrorOptions"
+                      :key="option.value"
+                      :command="option.value"
+                    >
+                      {{ option.label }}
+                    </el-dropdown-item>
                     <el-dropdown-item command="">官方源 (默认)</el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
             </template>
           </el-input>
+          <div class="mirror-hint">
+            当前检测：{{ linuxMirrorManagerText }}
+            <span v-if="linuxMirrorDistributionText"> / {{ linuxMirrorDistributionText }}</span>
+            <span v-if="linuxMirrorMessage">。{{ linuxMirrorMessage }}</span>
+          </div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -160,10 +185,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
-import { depsApi } from '@/api/deps'
-import { useAuthStore } from '@/stores/auth'
+import { ref, onMounted, onBeforeUnmount, watch, computed } from 'vue'
+import { depsApi, type MirrorsResponse } from '@/api/deps'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { openAuthorizedEventStream, type EventStreamConnection } from '@/utils/sse'
 
 const activeTab = ref('nodejs')
 const depsList = ref<any[]>([])
@@ -172,7 +197,8 @@ const showCreateDialog = ref(false)
 const showLogDialog = ref(false)
 const logContent = ref('')
 const logDone = ref(true)
-let eventSource: EventSource | null = null
+const currentLogRow = ref<any | null>(null)
+let eventSource: EventStreamConnection | null = null
 const logContainerRef = ref<HTMLElement>()
 let depsLogBuffer: string[] = []
 let depsLogFlushRaf = 0
@@ -187,6 +213,16 @@ const showMirrorDialog = ref(false)
 const mirrorLoading = ref(false)
 const mirrorSaving = ref(false)
 const mirrorForm = ref({ pip_mirror: '', npm_mirror: '', linux_mirror: '' })
+const mirrorMeta = ref<MirrorsResponse>({
+  pip_mirror: '',
+  npm_mirror: '',
+  linux_mirror: '',
+  linux_package_manager: '',
+  linux_distribution: '',
+  linux_mirror_supported: false,
+  linux_mirror_label: 'Linux',
+  linux_mirror_message: '',
+})
 
 const nodejsCount = ref(0)
 const pythonCount = ref(0)
@@ -197,6 +233,7 @@ function statusType(status: string) {
     case 'installed': return 'success'
     case 'installing': return 'warning'
     case 'removing': return 'warning'
+    case 'cancelled': return 'info'
     case 'failed': return 'danger'
     default: return 'info'
   }
@@ -207,10 +244,49 @@ function statusLabel(status: string) {
     case 'installed': return '已安装'
     case 'installing': return '安装中'
     case 'removing': return '卸载中'
+    case 'cancelled': return '已取消'
     case 'failed': return '失败'
     default: return status
   }
 }
+
+const linuxMirrorLabel = computed(() => mirrorMeta.value.linux_mirror_label || 'Linux')
+const linuxMirrorSupported = computed(() => mirrorMeta.value.linux_mirror_supported)
+const linuxMirrorMessage = computed(() => mirrorMeta.value.linux_mirror_message || '')
+const linuxMirrorManagerText = computed(() => mirrorMeta.value.linux_package_manager || '未识别')
+const linuxMirrorDistributionText = computed(() => mirrorMeta.value.linux_distribution || '')
+const linuxMirrorOptions = computed(() => {
+  const manager = mirrorMeta.value.linux_package_manager
+  const distro = mirrorMeta.value.linux_distribution
+
+  if (manager === 'apk') {
+    return [
+      { label: '清华大学', value: 'https://mirrors.tuna.tsinghua.edu.cn/alpine' },
+      { label: '阿里云', value: 'https://mirrors.aliyun.com/alpine' },
+      { label: '腾讯云', value: 'https://mirrors.cloud.tencent.com/alpine' },
+      { label: '华为云', value: 'https://repo.huaweicloud.com/alpine' },
+      { label: '中科大', value: 'https://mirrors.ustc.edu.cn/alpine' },
+    ]
+  }
+
+  if (manager === 'apt') {
+    if (distro === 'debian') {
+      return [
+        { label: '清华大学 Debian', value: 'https://mirrors.tuna.tsinghua.edu.cn/debian' },
+        { label: '阿里云 Debian', value: 'https://mirrors.aliyun.com/debian' },
+        { label: '腾讯云 Debian', value: 'https://mirrors.cloud.tencent.com/debian' },
+      ]
+    }
+    return [
+      { label: '清华大学 Ubuntu', value: 'https://mirrors.tuna.tsinghua.edu.cn/ubuntu' },
+      { label: '阿里云 Ubuntu', value: 'https://mirrors.aliyun.com/ubuntu' },
+      { label: '腾讯云 Ubuntu', value: 'https://mirrors.cloud.tencent.com/ubuntu' },
+      { label: '华为云 Ubuntu', value: 'https://repo.huaweicloud.com/ubuntu' },
+    ]
+  }
+
+  return []
+})
 
 async function loadData() {
   loading.value = true
@@ -303,7 +379,18 @@ async function handleReinstall(row: any) {
   catch { ElMessage.error('操作失败') }
 }
 
+async function handleCancel(row: any) {
+  try {
+    await depsApi.cancel(row.id)
+    ElMessage.success('取消请求已提交')
+    loadData()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.error || '取消失败')
+  }
+}
+
 function viewLog(row: any) {
+  currentLogRow.value = row
   logContent.value = ''
   logDone.value = !(row.status === 'installing' || row.status === 'removing')
   showLogDialog.value = true
@@ -317,35 +404,34 @@ function viewLog(row: any) {
     return
   }
 
-  const authStore = useAuthStore()
-  const url = `/api/v1/deps/${row.id}/log-stream?token=${authStore.accessToken}`
-  eventSource = new EventSource(url)
-
-  eventSource.onmessage = (e) => {
-    depsLogBuffer.push(e.data)
-    if (!depsLogFlushRaf) {
-      depsLogFlushRaf = requestAnimationFrame(() => {
-        logContent.value += depsLogBuffer.join('\n') + '\n'
-        depsLogBuffer = []
-        depsLogFlushRaf = 0
-        if (logContainerRef.value) {
-          logContainerRef.value.scrollTop = logContainerRef.value.scrollHeight
-        }
-      })
+  const url = `/api/v1/deps/${row.id}/log-stream`
+  eventSource = openAuthorizedEventStream(url, {
+    onMessage(data) {
+      depsLogBuffer.push(data)
+      if (!depsLogFlushRaf) {
+        depsLogFlushRaf = requestAnimationFrame(() => {
+          logContent.value += depsLogBuffer.join('\n') + '\n'
+          depsLogBuffer = []
+          depsLogFlushRaf = 0
+          if (logContainerRef.value) {
+            logContainerRef.value.scrollTop = logContainerRef.value.scrollHeight
+          }
+        })
+      }
+    },
+    onEvent(event) {
+      if (event.event === 'done') {
+        logDone.value = true
+        closeSSE()
+        loadData()
+      }
+    },
+    onError() {
+      logDone.value = true
+      closeSSE()
+      loadData()
     }
-  }
-
-  eventSource.addEventListener('done', () => {
-    logDone.value = true
-    closeSSE()
-    loadData()
   })
-
-  eventSource.onerror = () => {
-    logDone.value = true
-    closeSSE()
-    loadData()
-  }
 }
 
 function closeSSE() {
@@ -356,7 +442,10 @@ function closeSSE() {
 }
 
 watch(showLogDialog, (val) => {
-  if (!val) closeSSE()
+  if (!val) {
+    closeSSE()
+    currentLogRow.value = null
+  }
 })
 
 async function openMirrorDialog() {
@@ -364,6 +453,7 @@ async function openMirrorDialog() {
   mirrorLoading.value = true
   try {
     const res = await depsApi.getMirrors()
+    mirrorMeta.value = res
     mirrorForm.value.pip_mirror = res.pip_mirror || ''
     mirrorForm.value.npm_mirror = res.npm_mirror || ''
     mirrorForm.value.linux_mirror = res.linux_mirror || ''
@@ -372,6 +462,10 @@ async function openMirrorDialog() {
 }
 
 async function handleSaveMirrors() {
+  if (!linuxMirrorSupported.value && mirrorForm.value.linux_mirror.trim()) {
+    ElMessage.warning(linuxMirrorMessage.value || '当前系统暂不支持 Linux 镜像设置')
+    return
+  }
   mirrorSaving.value = true
   try {
     await depsApi.setMirrors(mirrorForm.value)
@@ -476,6 +570,21 @@ onBeforeUnmount(() => {
   margin: 0;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+.log-dialog-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.mirror-hint {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.5;
+  margin-top: 6px;
 }
 
 .running-tag {

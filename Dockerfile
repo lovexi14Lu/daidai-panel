@@ -1,4 +1,4 @@
-FROM node:20-alpine AS frontend-builder
+FROM node:20.19.0-alpine AS frontend-builder
 
 WORKDIR /build
 COPY web/package.json web/package-lock.json ./
@@ -16,7 +16,7 @@ COPY server/go.mod server/go.sum ./
 ENV GOPROXY=https://goproxy.cn,direct
 RUN go mod download
 COPY server/ ./
-ARG VERSION=1.1.0
+ARG VERSION=1.8.0
 ARG TARGETOS
 ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w -X daidai-panel/handler.Version=${VERSION}" -o daidai-server .

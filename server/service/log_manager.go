@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"daidai-panel/pkg/pathutil"
 )
 
 type LogStreamManager struct {
@@ -103,9 +105,11 @@ func ReadLogFile(logPath, logDir string) (string, error) {
 		fullPath = filepath.Join(logDir, logPath)
 	}
 
-	absPath, _ := filepath.Abs(fullPath)
-	absDir, _ := filepath.Abs(logDir)
-	if !strings.HasPrefix(absPath, absDir) {
+	absPath, err := pathutil.ResolveWithinBase(logDir, fullPath, true)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", err
+		}
 		return "", fmt.Errorf("检测到路径遍历攻击")
 	}
 
@@ -161,9 +165,11 @@ func DeleteLogFile(logPath, logDir string) error {
 		fullPath = filepath.Join(logDir, logPath)
 	}
 
-	absPath, _ := filepath.Abs(fullPath)
-	absDir, _ := filepath.Abs(logDir)
-	if !strings.HasPrefix(absPath, absDir) {
+	absPath, err := pathutil.ResolveWithinBase(logDir, fullPath, true)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return err
+		}
 		return fmt.Errorf("检测到路径遍历攻击")
 	}
 

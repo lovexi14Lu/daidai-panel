@@ -169,11 +169,11 @@ func (h *PlatformTokenHandler) Disable(c *gin.Context) {
 }
 
 func (h *PlatformTokenHandler) RegisterRoutes(r *gin.RouterGroup) {
-	pt := r.Group("/platform-tokens", middleware.JWTAuth())
+	pt := r.Group("/platform-tokens", middleware.JWTAuth(), middleware.RequireUserToken(), middleware.RequireAdmin())
 	{
 		pt.GET("/platforms", h.Platforms)
-		pt.POST("/platforms", middleware.RequireAdmin(), h.CreatePlatform)
-		pt.DELETE("/platforms/:id", middleware.RequireAdmin(), h.DeletePlatform)
+		pt.POST("/platforms", h.CreatePlatform)
+		pt.DELETE("/platforms/:id", h.DeletePlatform)
 		pt.GET("", h.List)
 		pt.POST("", h.Create)
 		pt.PUT("/:id", h.Update)

@@ -152,19 +152,22 @@ func (h *NotificationHandler) Types(c *gin.Context) {
 		{"type": "feishu", "name": "飞书"},
 		{"type": "gotify", "name": "Gotify"},
 		{"type": "pushdeer", "name": "PushDeer"},
+		{"type": "pushme", "name": "PushMe"},
 		{"type": "chanify", "name": "Chanify"},
 		{"type": "igot", "name": "iGot"},
+		{"type": "qmsg", "name": "Qmsg"},
 		{"type": "pushover", "name": "Pushover"},
 		{"type": "discord", "name": "Discord"},
 		{"type": "slack", "name": "Slack"},
 		{"type": "ntfy", "name": "ntfy"},
+		{"type": "wxpusher", "name": "WxPusher"},
 		{"type": "custom", "name": "自定义"},
 	}
 	response.Success(c, gin.H{"data": types})
 }
 
 func (h *NotificationHandler) RegisterRoutes(r *gin.RouterGroup) {
-	notify := r.Group("/notifications", middleware.JWTAuth())
+	notify := r.Group("/notifications", middleware.JWTAuth(), middleware.RequireUserToken(), middleware.RequireAdmin())
 	{
 		notify.GET("", h.List)
 		notify.POST("", h.Create)

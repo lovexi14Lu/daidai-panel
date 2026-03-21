@@ -1,5 +1,15 @@
 import request from './request'
 
+export interface BackupSelection {
+  configs: boolean
+  tasks: boolean
+  subscriptions: boolean
+  env_vars: boolean
+  logs: boolean
+  scripts: boolean
+  dependencies: boolean
+}
+
 export const systemApi = {
   info: () => request.get('/system/info'),
   dashboard: () => request.get('/system/dashboard'),
@@ -8,13 +18,17 @@ export const systemApi = {
   publicVersion: () => request.get('/system/public-version'),
   panelSettings: () => request.get('/system/panel-settings'),
   checkUpdate: () => request.get('/system/check-update'),
+  updateStatus: () => request.get('/system/update-status'),
   updatePanel: () => request.post('/system/update'),
   restart: () => request.post('/system/restart'),
   panelLog: (params?: { lines?: number; keyword?: string }) =>
     request.get('/system/panel-log', { params }),
-  backup: (password?: string) => request.post('/system/backup', { password }),
+  backup: (password?: string, selection?: Partial<BackupSelection>) => request.post('/system/backup', { password, selection }),
   backupList: () => request.get('/system/backups'),
-  downloadBackup: (filename: string) => `/api/system/backup/download/${filename}`,
+  downloadBackup: (filename: string) =>
+    request.get(`/system/backup/download/${encodeURIComponent(filename)}`, {
+      responseType: 'blob',
+    }) as Promise<Blob>,
   restore: (filename: string, password?: string) =>
     request.post('/system/restore', { filename, password }),
   deleteBackup: (filename: string) =>

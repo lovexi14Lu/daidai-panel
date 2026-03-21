@@ -1,0 +1,67 @@
+<script setup lang="ts">
+import { Delete, Document, Refresh } from '@element-plus/icons-vue'
+
+const loginLogsPage = defineModel<number>('loginLogsPage', { required: true })
+
+defineProps<{
+  loginLogs: any[]
+  loginLogsLoading: boolean
+  loginLogsTotal: number
+  onLoadLoginLogs: () => void | Promise<void>
+  onClearLoginLogs: () => void | Promise<void>
+}>()
+</script>
+
+<template>
+  <el-card shadow="never">
+    <template #header>
+      <div class="card-header">
+        <span class="card-title"><el-icon><Document /></el-icon> 登录日志</span>
+        <div class="card-header-buttons">
+          <el-button @click="onLoadLoginLogs"><el-icon><Refresh /></el-icon>刷新</el-button>
+          <el-button @click="onClearLoginLogs"><el-icon><Delete /></el-icon>清理旧日志</el-button>
+        </div>
+      </div>
+    </template>
+    <el-table :data="loginLogs" v-loading="loginLogsLoading" stripe empty-text="暂无数据">
+      <el-table-column prop="username" label="用户" width="100" />
+      <el-table-column label="状态" width="80">
+        <template #default="{ row }">
+          <el-tag size="small" :type="row.status === 0 ? 'success' : 'danger'">
+            {{ row.status === 0 ? '成功' : '失败' }}
+          </el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column prop="ip" label="IP地址" width="140" />
+      <el-table-column prop="method" label="登录方式" width="100" />
+      <el-table-column prop="message" label="原因" show-overflow-tooltip />
+      <el-table-column prop="created_at" label="时间" width="170">
+        <template #default="{ row }">{{ new Date(row.created_at).toLocaleString() }}</template>
+      </el-table-column>
+    </el-table>
+    <div class="pagination-container" v-if="loginLogsTotal > 15">
+      <el-pagination
+        v-model:current-page="loginLogsPage"
+        :total="loginLogsTotal"
+        :page-size="15"
+        layout="prev, pager, next"
+        @current-change="onLoadLoginLogs"
+      />
+    </div>
+  </el-card>
+</template>
+
+<style scoped lang="scss">
+@use './config-card-shared.scss' as *;
+
+.card-header-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.pagination-container {
+  display: flex;
+  justify-content: center;
+  margin-top: 20px;
+}
+</style>

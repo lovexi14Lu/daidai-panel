@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { getDisplayTaskLabels } from '../taskLabels'
 
 const props = defineProps<{
   visible: boolean
@@ -21,6 +22,13 @@ const statusType = computed(() => {
   if (props.task?.status === 0) return 'info'
   if (props.task?.status === 2) return 'warning'
   return 'success'
+})
+
+const displayLabels = computed(() => {
+  if (Array.isArray(props.task?.display_labels) && props.task.display_labels.length > 0) {
+    return props.task.display_labels
+  }
+  return getDisplayTaskLabels(props.task?.labels || [])
 })
 
 const formatTime = (t: string) => {
@@ -58,10 +66,10 @@ function handleClose() {
         <code style="word-break: break-all">{{ task.command }}</code>
       </el-descriptions-item>
       <el-descriptions-item label="标签" :span="2">
-        <el-tag v-for="label in task.labels" :key="label" size="small" effect="plain" style="margin-right: 6px">
+        <el-tag v-for="label in displayLabels" :key="label" size="small" effect="plain" style="margin-right: 6px">
           {{ label }}
         </el-tag>
-        <span v-if="!task.labels || task.labels.length === 0" style="color: var(--el-text-color-placeholder)">无</span>
+        <span v-if="displayLabels.length === 0" style="color: var(--el-text-color-placeholder)">无</span>
       </el-descriptions-item>
       <el-descriptions-item label="上次运行状态">
         <el-tag v-if="task.last_run_status === null" type="info" size="small">未运行</el-tag>

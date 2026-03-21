@@ -486,7 +486,7 @@ export const apiCategories: ApiCategory[] = [
         method: 'POST',
         path: '/api/notifications',
         title: '创建通知渠道',
-        description: '创建新的通知渠道，支持：webhook / email / telegram / dingtalk / wecom / bark / pushplus / serverchan / feishu',
+        description: '创建新的通知渠道，支持：webhook / email / telegram / dingtalk / wecom / bark / pushplus / serverchan / feishu / gotify / pushdeer / pushme / chanify / igot / qmsg / pushover / discord / slack / ntfy / wxpusher / custom',
         auth: 'jwt',
         bodyParams: [
           { name: 'name', type: 'string', required: true, description: '渠道名称' },

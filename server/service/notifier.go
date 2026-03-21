@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/smtp"
@@ -61,10 +62,14 @@ func sendToChannel(ch model.NotifyChannel, title, content string) error {
 		return sendGotify(cfg, title, content)
 	case "pushdeer":
 		return sendPushdeer(cfg, title, content)
+	case "pushme":
+		return sendPushMe(cfg, title, content)
 	case "chanify":
 		return sendChanify(cfg, title, content)
 	case "igot":
 		return sendIgot(cfg, title, content)
+	case "qmsg":
+		return sendQmsg(cfg, title, content)
 	case "pushover":
 		return sendPushover(cfg, title, content)
 	case "discord":
@@ -73,6 +78,8 @@ func sendToChannel(ch model.NotifyChannel, title, content string) error {
 		return sendSlack(cfg, title, content)
 	case "ntfy":
 		return sendNtfy(cfg, title, content)
+	case "wxpusher":
+		return sendWxPusher(cfg, title, content)
 	case "custom":
 		return sendCustomWebhook(cfg, title, content)
 	default:
@@ -95,7 +102,7 @@ func httpPost(url string, body interface{}, headers map[string]string) error {
 		req.Header.Set(k, v)
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := NewHTTPClient(10 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
@@ -313,6 +320,51 @@ func sendPushdeer(cfg map[string]string, title, content string) error {
 	return httpPost(apiURL, body, nil)
 }
 
+func sendPushMe(cfg map[string]string, title, content string) error {
+	server := strings.TrimSpace(cfg["server"])
+	if server == "" {
+		server = "https://push.i-i.me"
+	}
+
+	pushKey := strings.TrimSpace(cfg["key"])
+	if pushKey == "" {
+		return fmt.Errorf("PushMe push_key 为空")
+	}
+
+	form := url.Values{}
+	form.Set("push_key", pushKey)
+	form.Set("title", title)
+	form.Set("content", content)
+	if messageType := strings.TrimSpace(cfg["message_type"]); messageType != "" {
+		form.Set("type", messageType)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(server, "/"), strings.NewReader(form.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	client := NewHTTPClient(10 * time.Second)
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	responseText := strings.TrimSpace(string(body))
+	if responseText != "" && responseText != "success" && !strings.HasPrefix(responseText, "{") {
+		return fmt.Errorf("PushMe 返回异常: %s", responseText)
+	}
+
+	return nil
+}
+
 func sendChanify(cfg map[string]string, title, content string) error {
 	server := cfg["server"]
 	token := cfg["token"]
@@ -335,6 +387,57 @@ func sendIgot(cfg map[string]string, title, content string) error {
 		"content": content,
 	}
 	return httpPost(apiURL, body, nil)
+}
+
+func sendQmsg(cfg map[string]string, title, content string) error {
+	key := strings.TrimSpace(cfg["key"])
+	if key == "" {
+		return fmt.Errorf("Qmsg Key 为空")
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(cfg["mode"]))
+	path := "send"
+	if mode == "group" {
+		path = "group"
+	}
+
+	apiURL := fmt.Sprintf("https://qmsg.zendee.cn/%s/%s", path, key)
+	form := url.Values{}
+	form.Set("msg", fmt.Sprintf("%s\n%s", title, content))
+	if qq := strings.TrimSpace(cfg["qq"]); qq != "" {
+		form.Set("qq", qq)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, apiURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	client := NewHTTPClient(10 * time.Second)
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Success bool   `json:"success"`
+		Reason  string `json:"reason"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("Qmsg 返回无法解析: %s", strings.TrimSpace(string(body)))
+	}
+	if !result.Success {
+		return fmt.Errorf("Qmsg 发送失败: %s", strings.TrimSpace(result.Reason))
+	}
+
+	return nil
 }
 
 func sendPushover(cfg map[string]string, title, content string) error {
@@ -395,7 +498,7 @@ func sendNtfy(cfg map[string]string, title, content string) error {
 		req.Header.Set("Authorization", "Bearer "+v)
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := NewHTTPClient(10 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
@@ -406,6 +509,123 @@ func sendNtfy(cfg map[string]string, title, content string) error {
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
 	}
 	return nil
+}
+
+func sendWxPusher(cfg map[string]string, title, content string) error {
+	appToken := strings.TrimSpace(cfg["app_token"])
+	if appToken == "" {
+		return fmt.Errorf("WxPusher appToken 为空")
+	}
+
+	uids := splitNotificationTargets(cfg["uids"])
+	topicIDs, err := splitNotificationIntTargets(cfg["topic_ids"])
+	if err != nil {
+		return fmt.Errorf("WxPusher Topic ID 格式错误: %w", err)
+	}
+	if len(uids) == 0 && len(topicIDs) == 0 {
+		return fmt.Errorf("WxPusher 至少需要一个 UID 或 Topic ID")
+	}
+
+	contentType := 1
+	if raw := strings.TrimSpace(cfg["content_type"]); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil {
+			contentType = parsed
+		}
+	}
+
+	messageContent := fmt.Sprintf("%s\n%s", title, content)
+	switch contentType {
+	case 2:
+		messageContent = fmt.Sprintf(
+			"<h1>%s</h1><br/><div style='white-space: pre-wrap;'>%s</div>",
+			html.EscapeString(title),
+			html.EscapeString(content),
+		)
+	case 3:
+		messageContent = fmt.Sprintf("## %s\n\n%s", title, content)
+	}
+
+	body := map[string]interface{}{
+		"appToken":    appToken,
+		"content":     messageContent,
+		"summary":     title,
+		"contentType": contentType,
+	}
+	if len(uids) > 0 {
+		body["uids"] = uids
+	}
+	if len(topicIDs) > 0 {
+		body["topicIds"] = topicIDs
+	}
+
+	apiURL := "https://wxpusher.zjiecode.com/api/send/message"
+	if server := strings.TrimSpace(cfg["server"]); server != "" {
+		apiURL = strings.TrimRight(server, "/")
+	}
+
+	client := NewHTTPClient(10 * time.Second)
+	data, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, apiURL, bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var result struct {
+		Success bool   `json:"success"`
+		Code    int    `json:"code"`
+		Msg     string `json:"msg"`
+	}
+	if err := json.Unmarshal(respBody, &result); err == nil {
+		if !result.Success && result.Code != 1000 {
+			return fmt.Errorf("WxPusher 发送失败: %s", strings.TrimSpace(result.Msg))
+		}
+	}
+
+	return nil
+}
+
+func splitNotificationTargets(raw string) []string {
+	fields := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';' || r == '\n' || r == '\r' || r == '\t' || r == ' '
+	})
+
+	result := make([]string, 0, len(fields))
+	for _, field := range fields {
+		field = strings.TrimSpace(field)
+		if field != "" {
+			result = append(result, field)
+		}
+	}
+	return result
+}
+
+func splitNotificationIntTargets(raw string) ([]int, error) {
+	fields := splitNotificationTargets(raw)
+	result := make([]int, 0, len(fields))
+	for _, field := range fields {
+		value, err := strconv.Atoi(field)
+		if err != nil {
+			return nil, fmt.Errorf("无效整数 %q", field)
+		}
+		result = append(result, value)
+	}
+	return result, nil
 }
 
 func sendCustomWebhook(cfg map[string]string, title, content string) error {
@@ -440,7 +660,7 @@ func sendCustomWebhook(cfg map[string]string, title, content string) error {
 		}
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := NewHTTPClient(10 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return err

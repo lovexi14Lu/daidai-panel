@@ -2,7 +2,6 @@
 import { ref, onMounted, onBeforeUnmount, nextTick, computed } from 'vue'
 import { envApi } from '@/api/env'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import Sortable from 'sortablejs'
 
 const envList = ref<any[]>([])
 const loading = ref(false)
@@ -35,6 +34,14 @@ const batchGroupName = ref('')
 
 const tableRef = ref()
 let sortableInstance: any = null
+let sortableLoader: Promise<any> | null = null
+
+function loadSortable() {
+  if (!sortableLoader) {
+    sortableLoader = import('sortablejs').then((mod) => mod.default)
+  }
+  return sortableLoader
+}
 
 async function loadData() {
   loading.value = true
@@ -48,7 +55,9 @@ async function loadData() {
     })
     envList.value = res.data || []
     total.value = res.total || 0
-    nextTick(() => initSortable())
+    nextTick().then(() => {
+      void initSortable()
+    })
   } catch {
     ElMessage.error('加载环境变量失败')
   } finally {
@@ -75,33 +84,38 @@ onBeforeUnmount(() => {
   }
 })
 
-function initSortable() {
+async function initSortable() {
   if (sortableInstance) {
     sortableInstance.destroy()
     sortableInstance = null
   }
   const el = document.querySelector('.env-table .el-table__body-wrapper tbody')
   if (!el) return
-  sortableInstance = Sortable.create(el as HTMLElement, {
-    animation: 150,
-    handle: '.drag-handle',
-    ghostClass: 'sortable-ghost',
-    onEnd: async (evt: any) => {
-      const { oldIndex, newIndex } = evt
-      if (oldIndex === newIndex) return
-      const sourceItem = envList.value[oldIndex]
-      const targetItem = envList.value[newIndex]
-      if (!sourceItem || !targetItem) return
-      const item = envList.value.splice(oldIndex, 1)[0]
-      envList.value.splice(newIndex, 0, item)
-      try {
-        await envApi.sort(sourceItem.id, targetItem.id)
-      } catch {
-        ElMessage.error('排序失败')
-        loadData()
+  try {
+    const Sortable = await loadSortable()
+    sortableInstance = Sortable.create(el as HTMLElement, {
+      animation: 150,
+      handle: '.drag-handle',
+      ghostClass: 'sortable-ghost',
+      onEnd: async (evt: any) => {
+        const { oldIndex, newIndex } = evt
+        if (oldIndex === newIndex) return
+        const sourceItem = envList.value[oldIndex]
+        const targetItem = envList.value[newIndex]
+        if (!sourceItem || !targetItem) return
+        const item = envList.value.splice(oldIndex, 1)[0]
+        envList.value.splice(newIndex, 0, item)
+        try {
+          await envApi.sort(sourceItem.id, targetItem.id)
+        } catch {
+          ElMessage.error('排序失败')
+          loadData()
+        }
       }
-    }
-  })
+    })
+  } catch {
+    ElMessage.error('拖拽排序组件加载失败')
+  }
 }
 
 function handleSearch() {
@@ -246,6 +260,10 @@ async function handleBatchGroup() {
   if (selectedIds.value.length === 0) return
   batchGroupName.value = ''
   showBatchGroupDialog.value = true
+}
+
+function applyBatchGroupName(group: string) {
+  batchGroupName.value = group
 }
 
 async function confirmBatchGroup() {
@@ -598,9 +616,25 @@ function formatDateTime(t: string | null) {
     <el-dialog v-model="showBatchGroupDialog" title="批量设置分组" width="400px">
       <el-form label-width="80px">
         <el-form-item label="分组名称">
-          <el-select v-model="batchGroupName" filterable allow-create clearable placeholder="选择或输入分组名" style="width: 100%">
-            <el-option v-for="g in groups" :key="g" :label="g" :value="g" />
-          </el-select>
+          <el-input
+            v-model="batchGroupName"
+            clearable
+            placeholder="输入新分组名，或点击下方已有分组"
+            @keyup.enter="confirmBatchGroup"
+          />
+        </el-form-item>
+        <el-form-item v-if="groups.length > 0" label="已有分组">
+          <div class="batch-group-options">
+            <el-tag
+              v-for="g in groups"
+              :key="g"
+              class="batch-group-tag"
+              effect="plain"
+              @click="applyBatchGroupName(g)"
+            >
+              {{ g }}
+            </el-tag>
+          </div>
         </el-form-item>
         <el-alert type="info" :closable="false" show-icon>
           留空将清除选中变量的分组
@@ -720,5 +754,15 @@ function formatDateTime(t: string | null) {
   margin: 0;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+.batch-group-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.batch-group-tag {
+  cursor: pointer;
 }
 </style>

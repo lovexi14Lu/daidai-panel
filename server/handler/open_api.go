@@ -215,8 +215,6 @@ func (h *OpenAPIHandler) Token(c *gin.Context) {
 		return
 	}
 
-	database.DB.Model(&app).Update("call_count", app.CallCount+1)
-
 	response.Success(c, gin.H{
 		"data": gin.H{
 			"access_token": tokenStr,

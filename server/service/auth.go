@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"strings"
 	"time"
 
 	"daidai-panel/database"
@@ -16,8 +17,10 @@ var (
 	ErrInvalidPassword  = errors.New("密码错误")
 	ErrUserDisabled     = errors.New("账号已被禁用")
 	ErrUserExists       = errors.New("用户名已存在")
-	ErrInvalidUsername   = errors.New("用户名格式无效")
+	ErrInvalidUsername  = errors.New("用户名格式无效")
 	ErrPasswordTooShort = errors.New("密码过短")
+	ErrTOTPRequired     = errors.New("需要两步验证码")
+	ErrInvalidTOTP      = errors.New("两步验证码错误")
 )
 
 type AuthService struct{}
@@ -61,20 +64,30 @@ func (s *AuthService) InitAdmin(username, password string) (*model.User, error) 
 	return user, nil
 }
 
-func (s *AuthService) Login(username, password string) (*model.User, string, string, *middleware.TokenInfo, error) {
+func (s *AuthService) Login(username, password, totpCode string) (*model.User, string, string, *middleware.TokenInfo, *middleware.TokenInfo, error) {
 	username = validator.SanitizeString(username)
+	totpCode = strings.TrimSpace(totpCode)
 
 	var user model.User
 	if err := database.DB.Where("username = ?", username).First(&user).Error; err != nil {
-		return nil, "", "", nil, ErrUserNotFound
+		return nil, "", "", nil, nil, ErrUserNotFound
 	}
 
 	if !user.Enabled {
-		return nil, "", "", nil, ErrUserDisabled
+		return nil, "", "", nil, nil, ErrUserDisabled
 	}
 
 	if !crypto.CheckPassword(password, user.Password) {
-		return nil, "", "", nil, ErrInvalidPassword
+		return nil, "", "", nil, nil, ErrInvalidPassword
+	}
+
+	if IsTwoFactorEnabled(user.ID) {
+		if totpCode == "" {
+			return nil, "", "", nil, nil, ErrTOTPRequired
+		}
+		if !ValidateUserTOTP(user.ID, totpCode) {
+			return nil, "", "", nil, nil, ErrInvalidTOTP
+		}
 	}
 
 	now := time.Now()
@@ -83,15 +96,15 @@ func (s *AuthService) Login(username, password string) (*model.User, string, str
 
 	tokenInfo, err := middleware.GenerateAccessTokenInfo(user.Username, user.Role)
 	if err != nil {
-		return nil, "", "", nil, err
+		return nil, "", "", nil, nil, err
 	}
 
-	refreshToken, err := middleware.GenerateRefreshToken(user.Username, user.Role)
+	refreshInfo, err := middleware.GenerateRefreshTokenInfo(user.Username, user.Role)
 	if err != nil {
-		return nil, "", "", nil, err
+		return nil, "", "", nil, nil, err
 	}
 
-	return &user, tokenInfo.Token, refreshToken, tokenInfo, nil
+	return &user, tokenInfo.Token, refreshInfo.Token, tokenInfo, refreshInfo, nil
 }
 
 func (s *AuthService) RefreshToken(tokenStr string) (string, error) {
@@ -102,6 +115,10 @@ func (s *AuthService) RefreshToken(tokenStr string) (string, error) {
 
 	if claims.TokenType != "refresh" {
 		return "", errors.New("不是刷新令牌")
+	}
+
+	if middleware.IsTokenBlocked(claims.ID) {
+		return "", errors.New("刷新令牌已被撤销")
 	}
 
 	var user model.User

@@ -3,10 +3,7 @@ package handler
 import (
 	"bufio"
 	"encoding/json"
-	"fmt"
-	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -122,6 +119,8 @@ func (h *SystemHandler) Stats(c *gin.Context) {
 		successRate = float64(successLogs) / float64(totalLogs) * 100
 	}
 
+	scriptCount := service.CountScriptFiles(config.C.Data.ScriptsDir)
+
 	response.Success(c, gin.H{
 		"data": gin.H{
 			"tasks": gin.H{
@@ -136,17 +135,24 @@ func (h *SystemHandler) Stats(c *gin.Context) {
 				"failed":       failedLogs,
 				"success_rate": successRate,
 			},
+			"scripts": gin.H{
+				"total": scriptCount,
+			},
 		},
 	})
 }
 
 func (h *SystemHandler) Backup(c *gin.Context) {
 	var req struct {
-		Password string `json:"password"`
+		Password  string                  `json:"password"`
+		Selection service.BackupSelection `json:"selection"`
 	}
 	c.ShouldBindJSON(&req)
 
-	filePath, err := service.CreateBackup(req.Password)
+	filePath, err := service.CreateBackup(service.BackupCreateOptions{
+		Password:  req.Password,
+		Selection: req.Selection.NormalizeDefaults(),
+	})
 	if err != nil {
 		response.InternalError(c, "备份失败: "+err.Error())
 		return
@@ -197,14 +203,18 @@ func (h *SystemHandler) UploadBackup(c *gin.Context) {
 		return
 	}
 
-	if file.Size > 100*1024*1024 {
-		response.BadRequest(c, "文件过大，最大 100MB")
+	if file.Size > 512*1024*1024 {
+		response.BadRequest(c, "文件过大，最大 512MB")
 		return
 	}
 
 	filename := filepath.Base(file.Filename)
-	if !strings.HasSuffix(filename, ".json") && !strings.HasSuffix(filename, ".enc") {
-		response.BadRequest(c, "仅支持 .json 或 .enc 备份文件")
+	lowerName := strings.ToLower(filename)
+	if !strings.HasSuffix(lowerName, ".json") &&
+		!strings.HasSuffix(lowerName, ".enc") &&
+		!strings.HasSuffix(lowerName, ".tgz") &&
+		!strings.HasSuffix(lowerName, ".tar.gz") {
+		response.BadRequest(c, "仅支持 .json、.enc、.tgz 或 .tar.gz 备份文件")
 		return
 	}
 
@@ -246,6 +256,7 @@ func (h *SystemHandler) Version(c *gin.Context) {
 
 func (h *SystemHandler) PublicVersion(c *gin.Context) {
 	response.Success(c, gin.H{
+		"version": Version,
 		"data": gin.H{
 			"version": Version,
 		},
@@ -253,12 +264,16 @@ func (h *SystemHandler) PublicVersion(c *gin.Context) {
 }
 
 func (h *SystemHandler) PanelSettings(c *gin.Context) {
-	title := model.GetConfig("panel_title", "呆呆面板")
-	icon := model.GetConfig("panel_icon", "")
+	title := model.GetRegisteredConfig("panel_title")
+	icon := model.GetRegisteredConfig("panel_icon")
+	logBackgroundColor := model.GetRegisteredConfig("log_background_color")
+	logBackgroundImage := model.GetRegisteredConfig("log_background_image")
 	response.Success(c, gin.H{
 		"data": gin.H{
-			"panel_title": title,
-			"panel_icon":  icon,
+			"panel_title":          title,
+			"panel_icon":           icon,
+			"log_background_color": logBackgroundColor,
+			"log_background_image": logBackgroundImage,
 		},
 	})
 }
@@ -266,7 +281,7 @@ func (h *SystemHandler) PanelSettings(c *gin.Context) {
 func (h *SystemHandler) CheckUpdate(c *gin.Context) {
 	currentVersion := Version
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := service.NewHTTPClient(10 * time.Second)
 	resp, err := client.Get("https://api.github.com/repos/linzixuanzz/daidai-panel/releases/latest")
 	if err != nil {
 		response.InternalError(c, "检查更新失败: "+err.Error())
@@ -294,130 +309,52 @@ func (h *SystemHandler) CheckUpdate(c *gin.Context) {
 
 	latestVersion := strings.TrimPrefix(release.TagName, "v")
 	hasUpdate := compareVersions(currentVersion, latestVersion)
+	autoUpdateSupported := true
+	updateDisabledReason := ""
+	updateTarget := gin.H{}
+
+	plan, planErr := buildPanelUpdatePlan()
+	if planErr != nil {
+		autoUpdateSupported = false
+		updateDisabledReason = planErr.Error()
+	} else {
+		updateTarget = gin.H{
+			"container_name": plan.ContainerName,
+			"image_name":     plan.ImageName,
+		}
+	}
 
 	response.Success(c, gin.H{
 		"data": gin.H{
-			"current":       currentVersion,
-			"latest":        latestVersion,
-			"has_update":    hasUpdate,
-			"release_url":   release.HTMLURL,
-			"release_notes": release.Body,
-			"published_at":  release.PublishedAt,
+			"current":                currentVersion,
+			"latest":                 latestVersion,
+			"has_update":             hasUpdate,
+			"release_url":            release.HTMLURL,
+			"release_notes":          release.Body,
+			"published_at":           release.PublishedAt,
+			"auto_update_supported":  autoUpdateSupported,
+			"update_disabled_reason": updateDisabledReason,
+			"update_target":          updateTarget,
 		},
 	})
 }
 
 func (h *SystemHandler) UpdatePanel(c *gin.Context) {
-	containerName := os.Getenv("CONTAINER_NAME")
-	if containerName == "" {
-		containerName = "daidai-panel"
+	plan, err := buildPanelUpdatePlan()
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
 	}
 
-	imageName := os.Getenv("IMAGE_NAME")
-	if imageName == "" {
-		imageName = "linzixuanzz/daidai-panel:latest"
+	if err := panelUpdater.begin(plan.ContainerName, plan.ImageName); err != nil {
+		respondUpdateConflict(c, err.Error())
+		return
 	}
 
-	go func() {
-		time.Sleep(1 * time.Second)
-
-		pullCmd := exec.Command("docker", "pull", imageName)
-		if err := pullCmd.Run(); err != nil {
-			return
-		}
-
-		time.Sleep(1 * time.Second)
-
-		inspectCmd := exec.Command("docker", "inspect", "--format", "{{json .}}", containerName)
-		inspectOut, err := inspectCmd.Output()
-		if err != nil {
-			return
-		}
-
-		var containerInfo struct {
-			HostConfig struct {
-				Binds         []string `json:"Binds"`
-				NetworkMode   string   `json:"NetworkMode"`
-				RestartPolicy struct {
-					Name string `json:"Name"`
-				} `json:"RestartPolicy"`
-				PortBindings map[string][]struct {
-					HostIP   string `json:"HostIp"`
-					HostPort string `json:"HostPort"`
-				} `json:"PortBindings"`
-			} `json:"HostConfig"`
-			Config struct {
-				Env []string `json:"Env"`
-			} `json:"Config"`
-		}
-		if err := json.Unmarshal(inspectOut, &containerInfo); err != nil {
-			return
-		}
-
-		runArgs := []string{"run", "-d", "--name", containerName}
-
-		if containerInfo.HostConfig.RestartPolicy.Name != "" {
-			runArgs = append(runArgs, "--restart", containerInfo.HostConfig.RestartPolicy.Name)
-		}
-
-		networkMode := containerInfo.HostConfig.NetworkMode
-		if networkMode != "" && networkMode != "default" {
-			runArgs = append(runArgs, "--network", networkMode)
-		}
-
-		for port, bindings := range containerInfo.HostConfig.PortBindings {
-			for _, b := range bindings {
-				if b.HostPort != "" {
-					mapping := b.HostPort + ":" + strings.Split(port, "/")[0]
-					if b.HostIP != "" && b.HostIP != "0.0.0.0" {
-						mapping = b.HostIP + ":" + mapping
-					}
-					runArgs = append(runArgs, "-p", mapping)
-				}
-			}
-		}
-
-		for _, bind := range containerInfo.HostConfig.Binds {
-			runArgs = append(runArgs, "-v", bind)
-		}
-
-		skipEnvPrefixes := []string{"PATH=", "HOME=", "HOSTNAME=", "LANG=", "LC_", "TERM="}
-		for _, env := range containerInfo.Config.Env {
-			skip := false
-			for _, prefix := range skipEnvPrefixes {
-				if strings.HasPrefix(env, prefix) {
-					skip = true
-					break
-				}
-			}
-			if !skip {
-				runArgs = append(runArgs, "-e", env)
-			}
-		}
-
-		runArgs = append(runArgs, imageName)
-
-		var cmdParts []string
-		for _, arg := range runArgs {
-			cmdParts = append(cmdParts, shellQuote(arg))
-		}
-		script := fmt.Sprintf(
-			"sleep 2 && docker stop %s && docker rm %s && docker %s",
-			shellQuote(containerName),
-			shellQuote(containerName),
-			strings.Join(cmdParts, " "),
-		)
-
-		exec.Command("docker", "run", "-d", "--rm",
-			"-v", "/var/run/docker.sock:/var/run/docker.sock",
-			"docker:cli", "sh", "-c", script,
-		).Run()
-	}()
+	go executePanelUpdate(plan)
 
 	response.Success(c, gin.H{
-		"data": gin.H{
-			"message": "更新任务已启动，正在拉取最新镜像并重建容器",
-		},
+		"data": panelUpdater.snapshotCopy(),
 	})
 }
 
@@ -475,14 +412,15 @@ func (h *SystemHandler) RegisterRoutes(r *gin.RouterGroup) {
 
 	sys := r.Group("/system", middleware.JWTAuth())
 	{
-		sys.GET("/info", h.Info)
-		sys.GET("/dashboard", h.Dashboard)
-		sys.GET("/stats", h.Stats)
-		sys.GET("/version", h.Version)
-		sys.GET("/check-update", h.CheckUpdate)
+		sys.GET("/info", middleware.OpenAPIAccess("system"), middleware.RequireRole("viewer"), h.Info)
+		sys.GET("/dashboard", middleware.OpenAPIAccess("system"), middleware.RequireRole("viewer"), h.Dashboard)
+		sys.GET("/stats", middleware.OpenAPIAccess("system"), middleware.RequireRole("viewer"), h.Stats)
+		sys.GET("/version", middleware.OpenAPIAccess("system"), middleware.RequireRole("viewer"), h.Version)
+		sys.GET("/check-update", middleware.OpenAPIAccess("system"), middleware.RequireRole("viewer"), h.CheckUpdate)
+		sys.GET("/update-status", middleware.RequireAdmin(), h.UpdateStatus)
 		sys.POST("/update", middleware.RequireAdmin(), h.UpdatePanel)
 		sys.POST("/restart", middleware.RequireAdmin(), h.Restart)
-		sys.GET("/panel-log", h.PanelLog)
+		sys.GET("/panel-log", middleware.RequireUserToken(), middleware.RequireAdmin(), h.PanelLog)
 		sys.POST("/backup", middleware.RequireAdmin(), h.Backup)
 		sys.POST("/backup/upload", middleware.RequireAdmin(), h.UploadBackup)
 		sys.GET("/backups", middleware.RequireAdmin(), h.BackupList)

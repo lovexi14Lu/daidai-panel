@@ -3,11 +3,13 @@ package handler
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"daidai-panel/database"
 	"daidai-panel/middleware"
 	"daidai-panel/model"
+	"daidai-panel/pkg/netutil"
 	"daidai-panel/pkg/response"
 	"daidai-panel/service"
 
@@ -76,35 +78,13 @@ func (h *SecurityHandler) RevokeSession(c *gin.Context) {
 		return
 	}
 
-	blocklist := model.TokenBlocklist{
-		JTI:       session.JTI,
-		TokenType: "access",
-		UserID:    &session.UserID,
-		RevokedAt: time.Now(),
-		ExpiresAt: session.ExpiresAt,
-	}
-	database.DB.Create(&blocklist)
-
+	service.BlockSessionTokens(&session)
 	database.DB.Delete(&session)
 	response.Success(c, gin.H{"message": "会话已撤销"})
 }
 
 func (h *SecurityHandler) RevokeAllSessions(c *gin.Context) {
 	userID, _ := strconv.ParseUint(c.Param("user_id"), 10, 32)
-
-	var sessions []model.UserSession
-	database.DB.Where("user_id = ?", userID).Find(&sessions)
-
-	for _, s := range sessions {
-		blocklist := model.TokenBlocklist{
-			JTI:       s.JTI,
-			TokenType: "access",
-			UserID:    &s.UserID,
-			RevokedAt: time.Now(),
-			ExpiresAt: s.ExpiresAt,
-		}
-		database.DB.Create(&blocklist)
-	}
 
 	count := service.RevokeAllUserSessions(uint(userID))
 	response.Success(c, gin.H{"message": fmt.Sprintf("已撤销 %d 个会话", count)})
@@ -120,22 +100,8 @@ func (h *SecurityHandler) RevokeOtherSessions(c *gin.Context) {
 		return
 	}
 
-	var sessions []model.UserSession
-	database.DB.Where("user_id = ? AND jti != ?", user.ID, currentJTI).Find(&sessions)
-
-	for _, s := range sessions {
-		blocklist := model.TokenBlocklist{
-			JTI:       s.JTI,
-			TokenType: "access",
-			UserID:    &s.UserID,
-			RevokedAt: time.Now(),
-			ExpiresAt: s.ExpiresAt,
-		}
-		database.DB.Create(&blocklist)
-	}
-
-	database.DB.Where("user_id = ? AND jti != ?", user.ID, currentJTI).Delete(&model.UserSession{})
-	response.Success(c, gin.H{"message": fmt.Sprintf("已撤销 %d 个其他会话", len(sessions))})
+	count := service.RevokeOtherUserSessions(user.ID, currentJTI.(string))
+	response.Success(c, gin.H{"message": fmt.Sprintf("已撤销 %d 个其他会话", count)})
 }
 
 func (h *SecurityHandler) IPWhitelist(c *gin.Context) {
@@ -160,13 +126,19 @@ func (h *SecurityHandler) AddIPWhitelist(c *gin.Context) {
 		return
 	}
 
+	normalizedIP, err := netutil.NormalizeIPWhitelistEntry(req.IP)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
 	entry := model.IPWhitelist{
-		IP:      req.IP,
-		Remarks: req.Remarks,
+		IP:      normalizedIP,
+		Remarks: strings.TrimSpace(req.Remarks),
 	}
 
 	if err := database.DB.Create(&entry).Error; err != nil {
-		response.BadRequest(c, "IP 已在白名单中")
+		response.BadRequest(c, "该 IP 或网段已在白名单中")
 		return
 	}
 

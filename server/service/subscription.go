@@ -14,6 +14,8 @@ import (
 	"daidai-panel/database"
 	"daidai-panel/model"
 	"daidai-panel/pkg/cron"
+
+	"gorm.io/gorm"
 )
 
 type PullCallback func(line string)
@@ -69,8 +71,8 @@ func PullSubscriptionWithCallback(sub *model.Subscription, onOutput PullCallback
 
 	emit(fmt.Sprintf("[完成] 耗时 %.2f 秒, 状态: %s", duration, map[int]string{0: "成功", 1: "失败"}[status]))
 
-	if status == 0 && sub.AutoAddTask {
-		autoCreateTasksFromScripts(sub, emit)
+	if status == 0 {
+		syncSubscriptionTasks(sub, emit)
 	}
 
 	subLog := model.SubLog{
@@ -127,7 +129,7 @@ func pullGitRepoWithCallback(sub *model.Subscription, sshKeyPath string, emit Pu
 
 	destDir := filepath.Join(config.C.Data.ScriptsDir, saveDir)
 
-	env := os.Environ()
+	env := AppendProxyEnv(os.Environ())
 	if sshKeyPath != "" {
 		sshCmd := fmt.Sprintf("ssh -i %s -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null", sshKeyPath)
 		env = append(env, "GIT_SSH_COMMAND="+sshCmd)
@@ -196,7 +198,40 @@ func writeTempSSHKey(privateKey string) (string, error) {
 
 var cronCommentRe = regexp.MustCompile(`(?i)#\s*cron\s*[:：]\s*(.+)`)
 
-func autoCreateTasksFromScripts(sub *model.Subscription, emit PullCallback) {
+type subscriptionTaskSyncOptions struct {
+	autoAdd     bool
+	autoDelete  bool
+	defaultCron string
+	allowedExts map[string]bool
+}
+
+type subscriptionTaskCandidate struct {
+	Name           string
+	Command        string
+	CronExpression string
+}
+
+func subscriptionTaskLabel(subID uint) string {
+	return fmt.Sprintf("subscription:%d", subID)
+}
+
+func hasLabel(labels []string, target string) bool {
+	for _, item := range labels {
+		if item == target {
+			return true
+		}
+	}
+	return false
+}
+
+func withLabel(labels []string, target string) []string {
+	if hasLabel(labels, target) {
+		return labels
+	}
+	return append(labels, target)
+}
+
+func subscriptionSaveDir(sub *model.Subscription) string {
 	saveDir := sub.SaveDir
 	if saveDir == "" {
 		saveDir = sub.Alias
@@ -205,77 +240,251 @@ func autoCreateTasksFromScripts(sub *model.Subscription, emit PullCallback) {
 			saveDir = strings.TrimSuffix(parts[len(parts)-1], ".git")
 		}
 	}
+	return saveDir
+}
 
-	scriptsDir := filepath.Join(config.C.Data.ScriptsDir, saveDir)
-	scriptExts := map[string]bool{".js": true, ".ts": true, ".py": true, ".sh": true}
+func matchesSubscriptionFilters(sub *model.Subscription, filename string) bool {
+	if sub.Whitelist != "" {
+		matched := false
+		for _, pattern := range strings.Split(sub.Whitelist, ",") {
+			pattern = strings.TrimSpace(pattern)
+			if pattern != "" && strings.Contains(filename, pattern) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	if sub.Blacklist != "" {
+		for _, pattern := range strings.Split(sub.Blacklist, ",") {
+			pattern = strings.TrimSpace(pattern)
+			if pattern != "" && strings.Contains(filename, pattern) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func syncSubscriptionTasks(sub *model.Subscription, emit PullCallback) {
+	options := getSubscriptionTaskSyncOptions(sub)
+	if !options.autoAdd && !options.autoDelete {
+		return
+	}
+
+	candidates := collectSubscriptionTaskCandidates(sub, options)
+	label := subscriptionTaskLabel(sub.ID)
+
+	var managedTasks []model.Task
+	queryTasksByLabel(label).Find(&managedTasks)
+	managedByCommand := make(map[string]*model.Task, len(managedTasks))
+	for i := range managedTasks {
+		managedByCommand[strings.TrimSpace(managedTasks[i].Command)] = &managedTasks[i]
+	}
+
 	created := 0
+	updated := 0
+	deleted := 0
+	adopted := 0
 
-	filepath.Walk(scriptsDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
-			return nil
-		}
-		ext := strings.ToLower(filepath.Ext(info.Name()))
-		if !scriptExts[ext] {
-			return nil
-		}
-
-		if sub.Whitelist != "" {
-			matched := false
-			for _, pattern := range strings.Split(sub.Whitelist, ",") {
-				pattern = strings.TrimSpace(pattern)
-				if pattern != "" && strings.Contains(info.Name(), pattern) {
-					matched = true
-					break
+	if options.autoAdd {
+		for command, candidate := range candidates {
+			if existing, ok := managedByCommand[command]; ok {
+				changes := map[string]interface{}{}
+				if existing.Name != candidate.Name {
+					changes["name"] = candidate.Name
+					existing.Name = candidate.Name
 				}
-			}
-			if !matched {
-				return nil
-			}
-		}
-		if sub.Blacklist != "" {
-			for _, pattern := range strings.Split(sub.Blacklist, ",") {
-				pattern = strings.TrimSpace(pattern)
-				if pattern != "" && strings.Contains(info.Name(), pattern) {
-					return nil
+				if existing.CronExpression != candidate.CronExpression {
+					changes["cron_expression"] = candidate.CronExpression
+					existing.CronExpression = candidate.CronExpression
 				}
+				if len(changes) > 0 {
+					database.DB.Model(existing).Updates(changes)
+					GetSchedulerV2().UpdateJob(existing)
+					updated++
+					emit(fmt.Sprintf("[自动更新任务] %s (cron: %s)", candidate.Name, candidate.CronExpression))
+				}
+				continue
+			}
+
+			var existing model.Task
+			if err := database.DB.Where("command = ?", command).First(&existing).Error; err == nil {
+				labels := withLabel(existing.GetLabels(), label)
+				existing.SetLabelsFromSlice(labels)
+				database.DB.Model(&existing).Update("labels", existing.Labels)
+				managedByCommand[command] = &existing
+				adopted++
+				emit(fmt.Sprintf("[关联已有任务] %s", existing.Name))
+				continue
+			}
+
+			task := model.Task{
+				Name:            candidate.Name,
+				Command:         candidate.Command,
+				CronExpression:  candidate.CronExpression,
+				Status:          model.TaskStatusEnabled,
+				Timeout:         86400,
+				NotifyOnFailure: true,
+			}
+			task.SetLabelsFromSlice([]string{label})
+			if database.DB.Create(&task).Error == nil {
+				GetSchedulerV2().AddJob(&task)
+				managedByCommand[command] = &task
+				created++
+				emit(fmt.Sprintf("[自动添加任务] %s (cron: %s)", candidate.Name, candidate.CronExpression))
 			}
 		}
+	}
 
-		cronExpr := extractCronFromFile(path)
-		if cronExpr == "" {
-			return nil
-		}
+	if options.autoDelete {
+		for _, task := range managedTasks {
+			command := strings.TrimSpace(task.Command)
+			if !strings.HasPrefix(command, "task ") {
+				continue
+			}
+			if _, ok := candidates[command]; ok {
+				continue
+			}
 
-		relPath, _ := filepath.Rel(config.C.Data.ScriptsDir, path)
-		taskName := strings.TrimSuffix(info.Name(), ext)
-
-		var existing model.Task
-		if database.DB.Where("command LIKE ?", "%"+relPath+"%").First(&existing).Error == nil {
-			return nil
+			GetSchedulerV2().RemoveJob(task.ID)
+			database.DB.Where("task_id = ?", task.ID).Delete(&model.TaskLog{})
+			database.DB.Delete(&task)
+			deleted++
+			emit(fmt.Sprintf("[自动删除任务] %s", task.Name))
 		}
-
-		task := model.Task{
-			Name:            taskName,
-			Command:         "task " + relPath,
-			CronExpression:  cronExpr,
-			Status:          model.TaskStatusEnabled,
-			Timeout:         86400,
-			NotifyOnFailure: true,
-		}
-		if database.DB.Create(&task).Error == nil {
-			GetSchedulerV2().AddJob(&task)
-			created++
-			emit(fmt.Sprintf("[自动添加任务] %s (cron: %s)", taskName, cronExpr))
-		}
-		return nil
-	})
+	}
 
 	if created > 0 {
 		emit(fmt.Sprintf("[共自动添加 %d 个定时任务]", created))
 	}
+	if updated > 0 {
+		emit(fmt.Sprintf("[共自动更新 %d 个定时任务]", updated))
+	}
+	if adopted > 0 {
+		emit(fmt.Sprintf("[共关联 %d 个已有任务]", adopted))
+	}
+	if deleted > 0 {
+		emit(fmt.Sprintf("[共自动删除 %d 个失效任务]", deleted))
+	}
 }
 
-func extractCronFromFile(path string) string {
+func getSubscriptionTaskSyncOptions(sub *model.Subscription) subscriptionTaskSyncOptions {
+	defaultCron := strings.TrimSpace(model.GetRegisteredConfig("default_cron_rule"))
+	if defaultCron != "" && !cron.Parse(defaultCron).Valid {
+		defaultCron = ""
+	}
+
+	return subscriptionTaskSyncOptions{
+		autoAdd:     sub.AutoAddTask || isConfigEnabled("auto_add_cron", true),
+		autoDelete:  sub.AutoDelTask || isConfigEnabled("auto_del_cron", true),
+		defaultCron: defaultCron,
+		allowedExts: getSubscriptionAllowedExtensions(model.GetRegisteredConfig("repo_file_extensions")),
+	}
+}
+
+func isConfigEnabled(key string, defaultValue bool) bool {
+	if _, exists := model.GetSystemConfigDefinition(key); exists {
+		return model.GetRegisteredConfigBool(key)
+	}
+	return model.GetConfigBool(key, defaultValue)
+}
+
+func getSubscriptionAllowedExtensions(raw string) map[string]bool {
+	exts := make(map[string]bool)
+	for _, token := range strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';' || r == '\n' || r == '\r' || r == '\t' || r == ' '
+	}) {
+		token = strings.TrimSpace(strings.ToLower(token))
+		token = strings.TrimPrefix(token, "*")
+		if token == "" {
+			continue
+		}
+		if !strings.HasPrefix(token, ".") {
+			token = "." + token
+		}
+		exts[token] = true
+	}
+	if len(exts) > 0 {
+		return exts
+	}
+
+	return map[string]bool{
+		".js": true,
+		".ts": true,
+		".py": true,
+		".sh": true,
+	}
+}
+
+func shouldManageSubscriptionFile(sub *model.Subscription, filename string, allowedExts map[string]bool) bool {
+	ext := strings.ToLower(filepath.Ext(filename))
+	if !allowedExts[ext] {
+		return false
+	}
+	return matchesSubscriptionFilters(sub, filename)
+}
+
+func collectSubscriptionTaskCandidates(sub *model.Subscription, options subscriptionTaskSyncOptions) map[string]subscriptionTaskCandidate {
+	candidates := make(map[string]subscriptionTaskCandidate)
+	saveDir := subscriptionSaveDir(sub)
+	scriptsDir := filepath.Join(config.C.Data.ScriptsDir, saveDir)
+
+	if _, err := os.Stat(scriptsDir); err != nil {
+		return candidates
+	}
+
+	filepath.Walk(scriptsDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			switch strings.ToLower(info.Name()) {
+			case ".git", "node_modules", "__pycache__":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		if !shouldManageSubscriptionFile(sub, info.Name(), options.allowedExts) {
+			return nil
+		}
+
+		cronExpr := resolveCronForSubscriptionTask(path, options.defaultCron)
+		if cronExpr == "" {
+			return nil
+		}
+
+		relPath, err := filepath.Rel(config.C.Data.ScriptsDir, path)
+		if err != nil {
+			return nil
+		}
+		command := "task " + relPath
+		taskName := strings.TrimSuffix(info.Name(), filepath.Ext(info.Name()))
+		candidates[command] = subscriptionTaskCandidate{
+			Name:           taskName,
+			Command:        command,
+			CronExpression: cronExpr,
+		}
+		return nil
+	})
+
+	return candidates
+}
+
+func queryTasksByLabel(label string) *gorm.DB {
+	return database.DB.Where(
+		"labels = ? OR labels LIKE ? OR labels LIKE ? OR labels LIKE ?",
+		label,
+		label+",%",
+		"%,"+label,
+		"%,"+label+",%",
+	)
+}
+
+func resolveCronForSubscriptionTask(path string, defaultCron string) string {
 	f, err := os.Open(path)
 	if err != nil {
 		return ""
@@ -299,5 +508,5 @@ func extractCronFromFile(path string) string {
 			}
 		}
 	}
-	return ""
+	return strings.TrimSpace(defaultCron)
 }

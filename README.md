@@ -108,6 +108,32 @@
 
 ## 快速部署
 
+### 端口关系先看这个
+
+Docker 部署时，面板涉及 **3 个端口层级**。大多数部署问题，都是把这 3 个端口混在一起造成的。
+
+| 层级 | 作用 | 默认值 | 你通常要不要改 |
+|------|------|--------|----------------|
+| 宿主机端口 | 浏览器实际访问的端口，由 `-p` 左侧决定 | `5700` | 常改 |
+| 容器内 Nginx 端口 | 容器内前端入口，负责静态文件和 `/api` 反代，由 `PANEL_PORT` 决定 | `5700` | 一般不改 |
+| 容器内 Go 后端端口 | 容器内 API 服务端口，Nginx 反代到这里 | `5701` | 一般不要改 |
+
+```mermaid
+flowchart LR
+    A[浏览器<br/>http://宿主机IP:5700 或 8080]
+    B[宿主机映射端口<br/>docker -p 左侧]
+    C[容器内 Nginx<br/>PANEL_PORT 默认 5700]
+    D[容器内 Go API<br/>固定走 5701]
+
+    A --> B --> C
+    C -->|/api/* 反代| D
+```
+
+可以直接记住两条规则：
+
+1. Docker 部署时，**通常只改 `-p` 左侧宿主机端口**，不要碰容器内后端 `5701`。
+2. 宿主机上的反向代理（如宝塔/Nginx/Caddy）应当代理到 **宿主机映射端口**，不要直接代理到容器内 `5701`。
+
 ### Docker Compose（推荐）
 
 ```yaml
@@ -117,9 +143,9 @@ services:
     container_name: daidai-panel
     restart: unless-stopped
     ports:
-      - "5700:5700"
+      - "5700:5700" # 宿主机端口:容器内 Nginx 端口
     volumes:
-      - ./Dumb-Panel:/app/Dumb-Panel
+      - ./Dumb-Panel:/app/Dumb-Panel # 面板数据目录
       - /var/run/docker.sock:/var/run/docker.sock  
     environment:
       - TZ=Asia/Shanghai
@@ -130,6 +156,17 @@ services:
 ```bash
 docker compose up -d
 ```
+
+启动后访问：`http://localhost:5700`
+
+如果你希望通过 `8080` 访问，只需要把上面的端口映射改成：
+
+```yaml
+ports:
+  - "8080:5700"
+```
+
+也就是：**只改左侧宿主机端口，右侧容器内 Nginx 端口仍保持 `5700`。**
 
 ### Docker Run
 
@@ -153,12 +190,14 @@ docker run -d \
 
 > **说明**：挂载 `/var/run/docker.sock` 是为了支持面板内一键更新功能。如果不需要此功能，可以移除该挂载。
 
+> **说明**：`-p 5700:5700` 的左侧是宿主机端口，右侧是容器内 Nginx 端口，不是 Go 后端端口。
+
 ### 本地开发运行
 
 #### 环境要求
 
 - Go 1.25+
-- Node.js 18+（推荐 20+）
+- Node.js 20.19+（20.x LTS）或 22.12+
 - npm 或 pnpm
 
 #### 启动后端
@@ -221,10 +260,12 @@ go build -o daidai-panel .
 
 ### 自定义端口（Docker）
 
-Docker 部署时默认面板端口为 5700。如需修改宿主机访问端口，只需更改 `-p` 左侧的端口号即可：
+#### 场景 1：只修改宿主机访问端口（推荐）
+
+这是最常见的需求。容器内端口保持默认值即可，只改 `-p` 左侧：
 
 ```bash
-# 示例：通过宿主机 8080 端口访问面板
+# 浏览器访问 http://宿主机IP:8080
 docker run -d \
   --pull=always \
   --name daidai-panel \
@@ -236,10 +277,19 @@ docker run -d \
   linzixuanzz/daidai-panel:latest
 ```
 
-如果需要同时修改容器内部端口，通过 `PANEL_PORT` 环境变量指定，并保持 `-p` 右侧端口与其一致：
+此时端口关系是：
+
+- 宿主机访问端口：`8080`
+- 容器内 Nginx 端口：`5700`
+- 容器内 Go 后端端口：`5701`
+
+#### 场景 2：同时修改容器内 Nginx 端口（一般不需要）
+
+只有在你明确需要调整容器内 Nginx 监听端口时，才设置 `PANEL_PORT`，并保持 `-p` 右侧与其一致：
 
 ```bash
-# 示例：容器内部使用 7100 端口，宿主机通过 8080 访问
+# 浏览器访问 http://宿主机IP:8080
+# 容器内 Nginx 监听 7100
 docker run -d \
   --pull=always \
   --name daidai-panel \
@@ -252,7 +302,14 @@ docker run -d \
   linzixuanzz/daidai-panel:latest
 ```
 
-> **注意**：`-p` 右侧的容器端口必须与 `PANEL_PORT` 一致，否则面板将无法访问。
+此时端口关系是：
+
+- 宿主机访问端口：`8080`
+- 容器内 Nginx 端口：`7100`
+- 容器内 Go 后端端口：`5701`
+
+> **注意**：`-p` 右侧的容器端口必须与 `PANEL_PORT` 一致，否则宿主机流量进不到容器内 Nginx。
+> **注意**：`PANEL_PORT` 只影响容器内 Nginx 端口，不影响容器内 Go 后端 `5701`。
 
 ## 多架构支持
 
@@ -276,6 +333,9 @@ docker compose up -d
 ```
 ./Dumb-Panel/
 ├── daidai.db          # SQLite 数据库
+├── .jwt_secret        # 自动生成的 JWT 密钥
+├── panel.log          # 面板运行日志
+├── deps/              # Python / Node.js 依赖目录
 ├── scripts/           # 脚本文件存储
 ├── logs/              # 执行日志
 └── backups/           # 数据备份
@@ -296,8 +356,11 @@ docker compose up -d
 | `TZ` | 时区 | `Asia/Shanghai` |
 | `DATA_DIR` | 数据存储目录 | `/app/Dumb-Panel` |
 | `DB_PATH` | 数据库路径 | `${DATA_DIR}/daidai.db` |
+| `PANEL_PORT` | 容器内 Nginx 监听端口 | `5700` |
 | `SERVER_PORT` | Go 服务端口 | `5701` |
-| `PANEL_PORT` | 面板访问端口（容器内 Nginx 监听端口） | `5700` |
+
+> **建议**：Docker 部署时通常只改宿主机端口映射，不改 `SERVER_PORT`。  
+> `SERVER_PORT` 是容器内后端端口；若你强行修改它，还需要确保容器内反向代理配置同步指向新的后端端口。
 
 <details>
 <summary><b>config.yaml 完整配置说明</b></summary>
@@ -330,8 +393,39 @@ cors:
 
 </details>
 
+## 配置分层说明
+
+如果你准备做运维或二次集成，建议先区分下面两类配置：
+
+- 启动配置：Docker 环境变量、`config.yaml`
+- 运行期系统配置：设置页“系统设置”里保存到数据库 `system_configs` 的配置项
+
+运行期系统配置当前已经有统一注册表和运维说明，包含默认值、类型、何时生效、注意事项：
+
+- [系统配置与运维说明](./docs/system-config-operations.md)
+
+如果你通过 API 做自动化管理，也可以直接读取 `/api/v1/configs`，当前接口会返回：
+
+- `value`
+- `default_value`
+- `value_type`
+- `group`
+- `options`
+- `registered`
+
+## 反向代理说明
+
+### 场景 A：宿主机 Nginx 代理到 Docker 已发布端口
+
+这是最常见的部署方式：
+
+1. 呆呆面板容器通过 `-p 8080:5700` 暴露在宿主机 `8080`
+2. 宿主机上的 Nginx / 宝塔 / Caddy 再反代到 `127.0.0.1:8080`
+
+这时你的反向代理目标应该是 **宿主机端口 `8080`**，不是容器内后端 `5701`。
+
 <details>
-<summary><b>Nginx 反向代理配置（HTTPS）</b></summary>
+<summary><b>宿主机 Nginx 反向代理示例（HTTPS）</b></summary>
 
 ```nginx
 map $http_upgrade $connection_upgrade {
@@ -364,6 +458,26 @@ server {
 ```
 
 </details>
+
+如果你 Docker 用的是 `-p 8080:5700`，那就把上面的 `proxy_pass` 改成：
+
+```nginx
+proxy_pass http://127.0.0.1:8080;
+```
+
+### 场景 B：同一 Docker 网络中的反向代理容器
+
+如果你的反向代理本身也运行在 Docker 里，并且和呆呆面板在同一个 Docker 网络中，那么它可以直接代理到：
+
+- `http://daidai-panel:5700`
+
+这里的 `5700` 仍然是 **容器内 Nginx 端口**，不是 Go 后端 `5701`。
+
+### 不建议的做法
+
+- 不要让浏览器或宿主机反向代理直接访问容器内 Go 后端 `5701`
+- 不要把 SSE、下载、鉴权接口单独绕过容器内 Nginx
+- 不要把 `-p` 右侧容器端口和 `PANEL_PORT` 配成不一致
 
 ## 致谢
 

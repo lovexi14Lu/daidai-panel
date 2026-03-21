@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, watch, onUnmounted, nextTick } from 'vue'
+import { ref, watch, onUnmounted } from 'vue'
 import { taskApi } from '@/api/task'
-import { useAuthStore } from '@/stores/auth'
+import { openAuthorizedEventStream, type EventStreamConnection } from '@/utils/sse'
 
 const props = defineProps<{
   visible: boolean
@@ -19,7 +19,7 @@ const error = ref<string | null>(null)
 const loading = ref(false)
 const logContainerRef = ref<HTMLElement>()
 const autoScroll = ref(true)
-let eventSource: EventSource | null = null
+let eventSource: EventStreamConnection | null = null
 let logBuffer: string[] = []
 let logFlushRaf = 0
 
@@ -37,20 +37,19 @@ async function startStream() {
   error.value = null
   loading.value = true
 
-  const authStore = useAuthStore()
-  const url = `/api/v1/logs/${props.taskId}/stream?token=${authStore.accessToken}`
+  const url = `/api/v1/logs/${props.taskId}/stream`
 
   cleanup()
-  eventSource = new EventSource(url)
-
-  eventSource.onopen = () => {
-    loading.value = false
-  }
-
-  eventSource.onmessage = (e) => {
-    loading.value = false
-    if (e.data) {
-      logBuffer.push(e.data)
+  eventSource = openAuthorizedEventStream(url, {
+    onOpen() {
+      loading.value = false
+    },
+    onMessage(data) {
+      loading.value = false
+      if (!data) {
+        return
+      }
+      logBuffer.push(data)
       if (!logFlushRaf) {
         logFlushRaf = requestAnimationFrame(() => {
           logs.value.push(...logBuffer)
@@ -61,29 +60,30 @@ async function startStream() {
           }
         })
       }
-    }
-  }
-
-  eventSource.addEventListener('done', (e: any) => {
-    done.value = true
-    cleanup()
-    if (e.data === 'reconnect') {
-      setTimeout(() => startStream(), 500)
-      return
-    }
-    if (logs.value.length === 0) {
-      fetchLatestLog()
+    },
+    onEvent(event) {
+      if (event.event !== 'done') {
+        return
+      }
+      done.value = true
+      cleanup()
+      if (event.data === 'reconnect') {
+        setTimeout(() => startStream(), 500)
+        return
+      }
+      if (logs.value.length === 0) {
+        fetchLatestLog()
+      }
+    },
+    onError() {
+      loading.value = false
+      done.value = true
+      cleanup()
+      if (logs.value.length === 0) {
+        fetchLatestLog()
+      }
     }
   })
-
-  eventSource.onerror = () => {
-    loading.value = false
-    done.value = true
-    cleanup()
-    if (logs.value.length === 0) {
-      fetchLatestLog()
-    }
-  }
 }
 
 async function fetchLatestLog() {
@@ -142,16 +142,36 @@ function handleClose() {
   >
     <div class="log-viewer">
       <div class="log-toolbar">
-        <el-checkbox v-model="autoScroll" size="small">自动滚动</el-checkbox>
-        <el-tag v-if="!done" type="warning" size="small" effect="plain" class="status-tag">
-          <span class="pulse-dot-sm"></span> 运行中
-        </el-tag>
-        <el-tag v-else type="success" size="small" effect="plain" class="status-tag">
-          <el-icon :size="12"><CircleCheckFilled /></el-icon> 已完成
-        </el-tag>
+        <div class="toolbar-copy">
+          <div class="toolbar-title">实时输出</div>
+          <div class="toolbar-subtitle">{{ autoScroll ? '新日志会自动滚动到底部' : '已暂停自动滚动，可手动查看历史输出' }}</div>
+        </div>
+        <div class="toolbar-actions">
+          <el-checkbox v-model="autoScroll" size="small">自动滚动</el-checkbox>
+          <transition name="status-switch" mode="out-in">
+            <div v-if="!done" key="running" class="status-chip status-chip-running">
+              <span class="status-orb" aria-hidden="true">
+                <span class="status-orb-core"></span>
+              </span>
+              <span class="status-copy">
+                <span class="status-label">运行中</span>
+                <span class="status-meta">实时采集中</span>
+              </span>
+            </div>
+            <div v-else key="done" class="status-chip status-chip-done">
+              <span class="status-icon" aria-hidden="true">
+                <el-icon :size="14"><CircleCheckFilled /></el-icon>
+              </span>
+              <span class="status-copy">
+                <span class="status-label">已完成</span>
+                <span class="status-meta">日志已收齐</span>
+              </span>
+            </div>
+          </transition>
+        </div>
       </div>
 
-      <div ref="logContainerRef" class="log-container" v-loading="loading">
+      <div ref="logContainerRef" class="log-container dd-log-surface" v-loading="loading">
         <div v-if="error" class="log-error">{{ error }}</div>
         <div v-else-if="logs.length === 0 && !loading" class="log-empty">暂无日志输出</div>
         <pre v-else class="log-content">{{ logs.join('\n') }}</pre>
@@ -171,19 +191,22 @@ function handleClose() {
 .log-toolbar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 8px 12px;
-  background: var(--el-fill-color-lighter);
-  border-radius: 4px;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 14px 16px;
+  background:
+    linear-gradient(135deg, rgba(23, 37, 84, 0.08), rgba(15, 118, 110, 0.06)),
+    var(--el-fill-color-lighter);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 14px;
   margin-bottom: 12px;
 }
 
 .log-container {
   flex: 1;
   overflow-y: auto;
-  background: #1e1e1e;
-  border-radius: 4px;
-  padding: 12px;
+  padding: 14px;
   font-family: var(--dd-font-mono);
   font-size: 13px;
   line-height: 1.6;
@@ -202,24 +225,157 @@ function handleClose() {
   padding: 40px 20px;
 }
 
-.status-tag {
-  display: inline-flex !important;
+.toolbar-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.toolbar-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--el-text-color-primary);
+}
+
+.toolbar-subtitle {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.toolbar-actions {
+  display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 12px;
+  margin-left: auto;
+  flex-wrap: wrap;
 }
 
-.pulse-dot-sm {
-  display: inline-block;
-  width: 7px;
-  height: 7px;
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  min-height: 40px;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
+}
+
+.status-chip-running {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.18), rgba(251, 191, 36, 0.08));
+  border-color: rgba(245, 158, 11, 0.24);
+}
+
+.status-chip-done {
+  background: linear-gradient(135deg, rgba(22, 163, 74, 0.16), rgba(74, 222, 128, 0.08));
+  border-color: rgba(34, 197, 94, 0.24);
+}
+
+.status-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.1;
+}
+
+.status-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--el-text-color-primary);
+}
+
+.status-meta {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+}
+
+.status-orb,
+.status-icon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.status-orb::before {
+  content: '';
+  position: absolute;
+  inset: 0;
   border-radius: 50%;
-  background: var(--el-color-warning);
-  animation: smoothPulse 1.5s ease-in-out infinite;
-  will-change: opacity;
+  background: rgba(245, 158, 11, 0.22);
+  animation: runningRipple 1.8s ease-out infinite;
 }
 
-@keyframes smoothPulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
+.status-orb-core {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #f59e0b;
+  box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.16);
+  animation: runningCore 1.4s ease-in-out infinite;
+}
+
+.status-icon {
+  border-radius: 50%;
+  background: rgba(34, 197, 94, 0.14);
+  color: #16a34a;
+  animation: doneGlow 2.4s ease-in-out infinite;
+}
+
+.status-switch-enter-active,
+.status-switch-leave-active {
+  transition: all 0.22s ease;
+}
+
+.status-switch-enter-from,
+.status-switch-leave-to {
+  opacity: 0;
+  transform: translateY(-4px) scale(0.96);
+}
+
+@keyframes runningRipple {
+  0% {
+    transform: scale(0.78);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
+  }
+}
+
+@keyframes runningCore {
+  0%,
+  100% {
+    transform: scale(0.92);
+  }
+  50% {
+    transform: scale(1.08);
+  }
+}
+
+@keyframes doneGlow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.1);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(34, 197, 94, 0.04);
+  }
+}
+
+@media (max-width: 768px) {
+  .toolbar-actions {
+    width: 100%;
+    justify-content: space-between;
+    margin-left: 0;
+  }
+
+  .status-chip {
+    min-width: 138px;
+  }
 }
 </style>

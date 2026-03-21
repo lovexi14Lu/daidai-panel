@@ -156,5 +156,10 @@ func EnsureColumns() {
 		{"method", "VARCHAR(32) DEFAULT '密码登录'"},
 	})
 
+	ensureTableColumns("user_sessions", []columnDef{
+		{"refresh_jti", "VARCHAR(36)"},
+		{"refresh_expires_at", "DATETIME"},
+	})
+
 	log.Printf("column check completed")
 }

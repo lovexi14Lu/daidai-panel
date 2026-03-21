@@ -1,5 +1,6 @@
 import request from './request'
 import axios from 'axios'
+import type { GeeTestValidateResult } from '@/utils/geetest'
 
 export const authApi = {
   checkInit() {
@@ -10,12 +11,19 @@ export const authApi = {
     return request.post('/auth/init', { username, password }) as Promise<{ message: string; user: any }>
   },
 
-  login(username: string, password: string) {
-    return request.post('/auth/login', { username, password }) as Promise<{
+  login(username: string, password: string, totpCode?: string, captcha?: GeeTestValidateResult | null) {
+    return request.post('/auth/login', {
+      username,
+      password,
+      totp_code: totpCode || '',
+      captcha: captcha || undefined
+    }) as Promise<{
       message: string
       access_token: string
       refresh_token: string
       user: any
+      two_factor_required?: boolean
+      captcha_required?: boolean
     }>
   },
 
@@ -41,7 +49,17 @@ export const authApi = {
     }) as Promise<{ message: string }>
   },
 
-  captchaConfig() {
-    return request.get('/auth/captcha-config') as Promise<{ enabled: boolean; captcha_id: string }>
+  captchaConfig(username?: string) {
+    return request.get('/auth/captcha-config', {
+      params: username ? { username } : undefined
+    }) as Promise<{
+      enabled: boolean
+      captcha_id: string
+      configured: boolean
+      implemented: boolean
+      required: boolean
+      require_after_failures: number
+      message: string
+    }>
   }
 }

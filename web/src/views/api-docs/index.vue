@@ -1,20 +1,22 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
-import { apiCategories, generateCodeExamples, type ApiEndpoint } from './apiData'
+import { ref, computed, onMounted } from 'vue'
+import type { ApiCategory, ApiEndpoint } from './apiData'
 
-const defaultEndpoint = apiCategories[0]!.endpoints[0]!
-const defaultCategory = apiCategories[0]!
+type ApiDocsModule = typeof import('./apiData')
 
-const selectedId = ref(defaultEndpoint.id)
+const apiDataModule = ref<ApiDocsModule | null>(null)
+const apiCategories = ref<ApiCategory[]>([])
+const apiLoading = ref(true)
+const selectedId = ref('')
 const searchText = ref('')
 const codeTab = ref('Shell')
 const copiedKey = ref('')
 const mobileMenuOpen = ref(false)
 
 const filteredCategories = computed(() => {
-  if (!searchText.value.trim()) return apiCategories
+  if (!searchText.value.trim()) return apiCategories.value
   const kw = searchText.value.toLowerCase()
-  return apiCategories
+  return apiCategories.value
     .map(cat => ({
       ...cat,
       endpoints: cat.endpoints.filter(
@@ -26,26 +28,46 @@ const filteredCategories = computed(() => {
     .filter(cat => cat.endpoints.length > 0)
 })
 
-const currentEndpoint = computed<ApiEndpoint>(() => {
-  for (const cat of apiCategories) {
+const currentEndpoint = computed<ApiEndpoint | null>(() => {
+  for (const cat of apiCategories.value) {
     for (const ep of cat.endpoints) {
       if (ep.id === selectedId.value) return ep
     }
   }
-  return defaultEndpoint
+  return apiCategories.value[0]?.endpoints[0] || null
 })
 
 const currentCategory = computed(() => {
-  for (const cat of apiCategories) {
+  for (const cat of apiCategories.value) {
     if (cat.endpoints.some(ep => ep.id === selectedId.value)) return cat
   }
-  return defaultCategory
+  return apiCategories.value[0] || null
 })
 
-const codeExamples = computed<Record<string, string>>(() => generateCodeExamples(currentEndpoint.value))
+const codeExamples = computed<Record<string, string>>(() => {
+  if (!apiDataModule.value || !currentEndpoint.value) return {}
+  return apiDataModule.value.generateCodeExamples(currentEndpoint.value)
+})
+const apiBaseOrigin = computed(() => {
+  if (apiDataModule.value) {
+    return apiDataModule.value.getApiBaseOrigin()
+  }
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return window.location.origin
+  }
+  return 'http://localhost:5701'
+})
 
 const totalEndpoints = computed(() =>
-  apiCategories.reduce((sum, cat) => sum + cat.endpoints.length, 0))
+  apiCategories.value.reduce((sum, cat) => sum + cat.endpoints.length, 0))
+
+onMounted(async () => {
+  const module = await import('./apiData')
+  apiDataModule.value = module
+  apiCategories.value = module.apiCategories
+  selectedId.value = module.apiCategories[0]?.endpoints[0]?.id || ''
+  apiLoading.value = false
+})
 
 function handleSelect(id: string) {
   selectedId.value = id
@@ -140,14 +162,15 @@ function methodClass(method: string) {
       </div>
 
       <div class="api-content">
+        <template v-if="!apiLoading && currentEndpoint && currentCategory">
           <div class="api-breadcrumb">{{ currentCategory.label }} / {{ currentEndpoint.title }}</div>
           <h2 class="api-endpoint-title">{{ currentEndpoint.title }}</h2>
 
           <div class="url-bar">
             <span class="method-badge" :class="methodClass(currentEndpoint.method)">{{ currentEndpoint.method }}</span>
-            <span class="url-path">http://localhost:5701{{ currentEndpoint.path }}</span>
+            <span class="url-path">{{ apiBaseOrigin }}{{ currentEndpoint.path }}</span>
             <el-tooltip :content="copiedKey === 'url' ? '已复制' : '复制 URL'" placement="top">
-              <el-button text size="small" @click="handleCopy(`http://localhost:5701${currentEndpoint.path}`, 'url')">
+              <el-button text size="small" @click="handleCopy(`${apiBaseOrigin}${currentEndpoint.path}`, 'url')">
                 <el-icon><DocumentCopy /></el-icon>
               </el-button>
             </el-tooltip>
@@ -309,6 +332,8 @@ function methodClass(method: string) {
             </div>
           </div>
         </el-card>
+        </template>
+        <el-empty v-else description="正在加载接口文档..." />
       </div>
     </div>
   </div>

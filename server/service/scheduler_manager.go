@@ -14,7 +14,7 @@ var globalExecutor *TaskExecutor
 func InitSchedulerV2() {
 	globalExecutor = NewTaskExecutor()
 
-	workerCount := model.GetConfigInt("max_concurrent_tasks", 5)
+	workerCount := model.GetRegisteredConfigInt("max_concurrent_tasks")
 	if workerCount < 1 {
 		workerCount = 4
 	}

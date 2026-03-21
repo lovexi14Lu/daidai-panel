@@ -24,7 +24,7 @@ func GitClone(url, branch, destDir string, sshKeyPath string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = config.C.Data.ScriptsDir
 
-	env := os.Environ()
+	env := AppendProxyEnv(os.Environ())
 	if sshKeyPath != "" {
 		sshCmd := fmt.Sprintf("ssh -i %s -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null", sshKeyPath)
 		env = append(env, "GIT_SSH_COMMAND="+sshCmd)
@@ -39,7 +39,7 @@ func GitPull(repoDir string, sshKeyPath string) (string, error) {
 	cmd := exec.Command("git", "pull")
 	cmd.Dir = repoDir
 
-	env := os.Environ()
+	env := AppendProxyEnv(os.Environ())
 	if sshKeyPath != "" {
 		sshCmd := fmt.Sprintf("ssh -i %s -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null", sshKeyPath)
 		env = append(env, "GIT_SSH_COMMAND="+sshCmd)
@@ -79,10 +79,12 @@ func DownloadFile(url, destPath string) (string, error) {
 
 	args := []string{"-fsSL", "-o", destPath, url}
 	cmd := exec.Command("curl", args...)
+	cmd.Env = AppendProxyEnv(os.Environ())
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		args = []string{"-q", "-O", destPath, url}
 		cmd = exec.Command("wget", args...)
+		cmd.Env = AppendProxyEnv(os.Environ())
 		output, err = cmd.CombinedOutput()
 	}
 	return string(output), err

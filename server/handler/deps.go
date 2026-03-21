@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,6 +17,7 @@ import (
 	"daidai-panel/middleware"
 	"daidai-panel/model"
 	"daidai-panel/pkg/response"
+	"daidai-panel/service"
 
 	"github.com/gin-gonic/gin"
 )
@@ -28,7 +30,11 @@ type depLogBroadcaster struct {
 var (
 	depLogStreams   = make(map[uint]*depLogBroadcaster)
 	depLogStreamsMu sync.RWMutex
+	depOperations   = make(map[uint]context.CancelFunc)
+	depOpsMu        sync.Mutex
 )
+
+const dependencyOperationTimeout = 20 * time.Minute
 
 func getOrCreateBroadcaster(id uint) *depLogBroadcaster {
 	depLogStreamsMu.Lock()
@@ -52,6 +58,30 @@ func removeBroadcaster(id uint) {
 		b.mu.Unlock()
 		delete(depLogStreams, id)
 	}
+}
+
+func registerDepOperation(id uint, cancel context.CancelFunc) {
+	depOpsMu.Lock()
+	defer depOpsMu.Unlock()
+	depOperations[id] = cancel
+}
+
+func unregisterDepOperation(id uint) {
+	depOpsMu.Lock()
+	defer depOpsMu.Unlock()
+	delete(depOperations, id)
+}
+
+func cancelDepOperation(id uint) bool {
+	depOpsMu.Lock()
+	cancel, exists := depOperations[id]
+	depOpsMu.Unlock()
+	if !exists {
+		return false
+	}
+
+	cancel()
+	return true
 }
 
 func (b *depLogBroadcaster) subscribe() chan string {
@@ -232,17 +262,6 @@ func (h *DepsHandler) GetStatus(c *gin.Context) {
 func (h *DepsHandler) LogStream(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
 
-	tokenStr := c.Query("token")
-	if tokenStr == "" {
-		c.JSON(401, gin.H{"error": "缺少令牌"})
-		return
-	}
-	claims, err := middleware.ParseToken(tokenStr)
-	if err != nil || claims.TokenType != "access" {
-		c.JSON(401, gin.H{"error": "令牌无效"})
-		return
-	}
-
 	var dep model.Dependency
 	if err := database.DB.First(&dep, id).Error; err != nil {
 		c.JSON(404, gin.H{"error": "依赖不存在"})
@@ -334,6 +353,28 @@ func (h *DepsHandler) Reinstall(c *gin.Context) {
 	response.Success(c, gin.H{"message": "重新安装中"})
 }
 
+func (h *DepsHandler) Cancel(c *gin.Context) {
+	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
+
+	var dep model.Dependency
+	if err := database.DB.First(&dep, id).Error; err != nil {
+		response.NotFound(c, "依赖不存在")
+		return
+	}
+
+	if dep.Status != model.DepStatusInstalling && dep.Status != model.DepStatusRemoving {
+		response.BadRequest(c, "当前依赖任务未在处理中")
+		return
+	}
+
+	if !cancelDepOperation(uint(id)) {
+		response.BadRequest(c, "当前依赖任务未在运行中")
+		return
+	}
+
+	response.Success(c, gin.H{"message": "取消请求已提交"})
+}
+
 func (h *DepsHandler) PipList(c *gin.Context) {
 	out, err := exec.Command("pip3", "list", "--format=json").Output()
 	if err != nil {
@@ -357,9 +398,14 @@ func (h *DepsHandler) NpmList(c *gin.Context) {
 
 func (h *DepsHandler) GetMirrors(c *gin.Context) {
 	result := gin.H{
-		"pip_mirror":   "",
-		"npm_mirror":   "",
-		"linux_mirror": "",
+		"pip_mirror":             "",
+		"npm_mirror":             "",
+		"linux_mirror":           "",
+		"linux_package_manager":  "",
+		"linux_distribution":     "",
+		"linux_mirror_supported": false,
+		"linux_mirror_label":     "Linux",
+		"linux_mirror_message":   "",
 	}
 
 	if out, err := exec.Command("pip3", "config", "get", "global.index-url").Output(); err == nil {
@@ -375,18 +421,13 @@ func (h *DepsHandler) GetMirrors(c *gin.Context) {
 		}
 	}
 
-	if data, err := os.ReadFile("/etc/apk/repositories"); err == nil {
-		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
-			if line != "" && !strings.HasPrefix(line, "#") {
-				parts := strings.SplitN(line, "/v", 2)
-				if len(parts) > 0 {
-					result["linux_mirror"] = strings.TrimRight(parts[0], "/")
-					break
-				}
-			}
-		}
-	}
+	linuxMirrorInfo := getLinuxMirrorInfo()
+	result["linux_package_manager"] = linuxMirrorInfo.Manager
+	result["linux_distribution"] = linuxMirrorInfo.Distribution
+	result["linux_mirror"] = linuxMirrorInfo.Mirror
+	result["linux_mirror_supported"] = linuxMirrorInfo.Supported
+	result["linux_mirror_label"] = linuxMirrorInfo.Label
+	result["linux_mirror_message"] = linuxMirrorInfo.Message
 
 	response.Success(c, result)
 }
@@ -445,23 +486,12 @@ func (h *DepsHandler) SetMirrors(c *gin.Context) {
 
 	if req.LinuxMirror != nil {
 		mirror := strings.TrimSpace(*req.LinuxMirror)
-		if mirror == "" {
-			mirror = "https://dl-cdn.alpinelinux.org/alpine"
-		}
-		if !strings.HasPrefix(mirror, "http://") && !strings.HasPrefix(mirror, "https://") {
-			errors = append(errors, "Linux 镜像源必须以 http:// 或 https:// 开头")
+		manager, err := detectLinuxPackageManager()
+		if err != nil {
+			errors = append(errors, err.Error())
 		} else {
-			mirror = strings.TrimRight(mirror, "/")
-			out, err := exec.Command("cat", "/etc/alpine-release").Output()
-			ver := "3.19"
-			if err == nil {
-				parts := strings.Split(strings.TrimSpace(string(out)), ".")
-				if len(parts) >= 2 {
-					ver = parts[0] + "." + parts[1]
-				}
-			}
-			content := fmt.Sprintf("%s/v%s/main\n%s/v%s/community\n", mirror, ver, mirror, ver)
-			if err := os.WriteFile("/etc/apk/repositories", []byte(content), 0644); err != nil {
+			distribution := detectLinuxDistribution()
+			if err := setLinuxMirror(manager, distribution, mirror); err != nil {
 				errors = append(errors, "设置 Linux 镜像源失败: "+err.Error())
 			}
 		}
@@ -490,6 +520,8 @@ func runCmdWithSSE(cmd *exec.Cmd, id uint, successStatus string, deleteOnSuccess
 	broadcaster := getOrCreateBroadcaster(id)
 	defer removeBroadcaster(id)
 
+	service.SetPgid(cmd)
+
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
 		database.DB.Model(&model.Dependency{}).Where("id = ?", id).Updates(map[string]interface{}{
@@ -501,6 +533,13 @@ func runCmdWithSSE(cmd *exec.Cmd, id uint, successStatus string, deleteOnSuccess
 	}
 	cmd.Stderr = cmd.Stdout
 
+	ctx, cancel := context.WithTimeout(context.Background(), dependencyOperationTimeout)
+	registerDepOperation(id, cancel)
+	defer func() {
+		cancel()
+		unregisterDepOperation(id)
+	}()
+
 	if err := cmd.Start(); err != nil {
 		database.DB.Model(&model.Dependency{}).Where("id = ?", id).Updates(map[string]interface{}{
 			"status": model.DepStatusFailed,
@@ -511,31 +550,124 @@ func runCmdWithSSE(cmd *exec.Cmd, id uint, successStatus string, deleteOnSuccess
 	}
 
 	var logBuf strings.Builder
-	scanner := bufio.NewScanner(pipe)
-	scanner.Buffer(make([]byte, 64*1024), 256*1024)
-	for scanner.Scan() {
-		line := scanner.Text()
+	var logMu sync.Mutex
+	var existing model.Dependency
+	if err := database.DB.Select("log").First(&existing, id).Error; err == nil && existing.Log != "" {
+		logBuf.WriteString(existing.Log)
+		if !strings.HasSuffix(existing.Log, "\n") {
+			logBuf.WriteString("\n")
+		}
+	}
+	lastPersistAt := time.Now()
+	logDirty := false
+	appendLine := func(line string, broadcast bool) {
+		logMu.Lock()
+		defer logMu.Unlock()
+
 		logBuf.WriteString(line)
 		logBuf.WriteString("\n")
-		broadcaster.broadcast(line)
+		logDirty = true
+		if broadcast {
+			broadcaster.broadcast(line)
+		}
+	}
+	flushLog := func(force bool) {
+		logMu.Lock()
+		defer logMu.Unlock()
+
+		if !logDirty {
+			return
+		}
+		if !force && time.Since(lastPersistAt) < 250*time.Millisecond {
+			return
+		}
 		database.DB.Model(&model.Dependency{}).Where("id = ?", id).Update("log", logBuf.String())
+		lastPersistAt = time.Now()
+		logDirty = false
 	}
 
+	appendLine(fmt.Sprintf("[依赖任务已启动，超时阈值：%s]", dependencyOperationTimeout.Truncate(time.Second)), true)
+
+	scanDone := make(chan struct{})
+	go func() {
+		defer close(scanDone)
+
+		scanner := bufio.NewScanner(pipe)
+		scanner.Buffer(make([]byte, 64*1024), 256*1024)
+		for scanner.Scan() {
+			appendLine(scanner.Text(), true)
+			flushLog(false)
+		}
+
+		if err := scanner.Err(); err != nil {
+			appendLine("[读取安装输出失败] "+err.Error(), true)
+		}
+	}()
+
+	waitCh := make(chan error, 1)
+	go func() {
+		waitCh <- cmd.Wait()
+	}()
+
 	status := successStatus
-	if err := cmd.Wait(); err != nil {
-		status = model.DepStatusFailed
+	waitErr := error(nil)
+	select {
+	case waitErr = <-waitCh:
+	case <-ctx.Done():
+		if cmd.Process != nil {
+			service.KillProcessGroup(cmd.Process)
+		}
+		waitErr = <-waitCh
+		if ctx.Err() == context.DeadlineExceeded {
+			appendLine("[依赖任务已超时，进程已终止]", true)
+			status = model.DepStatusFailed
+		} else {
+			appendLine("[依赖任务已取消]", true)
+			status = model.DepStatusCancelled
+		}
 	}
+
+	<-scanDone
+	if waitErr != nil && status == successStatus {
+		status = model.DepStatusFailed
+		if hint := buildDependencyFailureHint(logBuf.String()); hint != "" {
+			appendLine(hint, true)
+		}
+	}
+
+	flushLog(true)
 
 	if deleteOnSuccess && status == successStatus {
 		database.DB.Delete(&model.Dependency{}, id)
 	} else {
+		logMu.Lock()
+		finalLog := logBuf.String()
+		logMu.Unlock()
 		database.DB.Model(&model.Dependency{}).Where("id = ?", id).Updates(map[string]interface{}{
 			"status": status,
-			"log":    logBuf.String(),
+			"log":    finalLog,
 		})
 	}
 
 	broadcaster.done()
+}
+
+func buildDependencyFailureHint(logText string) string {
+	lower := strings.ToLower(logText)
+	switch {
+	case strings.Contains(lower, "could not get lock") ||
+		strings.Contains(lower, "unable to acquire the dpkg frontend lock") ||
+		strings.Contains(lower, "unable to lock database") ||
+		strings.Contains(lower, "another app is currently holding the yum lock"):
+		return "[检测到系统包管理器锁冲突，请稍后重试，或先确认没有其他 apt/yum/dnf/apk 任务正在运行]"
+	case strings.Contains(lower, "temporary failure resolving") ||
+		strings.Contains(lower, "could not resolve") ||
+		strings.Contains(lower, "connection timed out") ||
+		strings.Contains(lower, "failed to fetch"):
+		return "[检测到网络或镜像源异常，请检查 Linux 镜像源配置、代理设置和宿主机网络连通性]"
+	default:
+		return ""
+	}
 }
 
 func ensureTmpDir() {
@@ -549,12 +681,35 @@ func installDependency(id uint, depType, name string) {
 	switch depType {
 	case model.DepTypeNodeJS:
 		cmd = exec.Command("npm", "install", "--prefix", filepath.Join(depsDir, "nodejs"), name)
+		cmd.Env = service.AppendProxyEnv(os.Environ())
 	case model.DepTypePython:
 		pipBin := filepath.Join(depsDir, "python", "venv", "bin", "pip")
 		cmd = exec.Command(pipBin, "install", name)
-		cmd.Env = append(os.Environ(), "TMPDIR=/tmp")
+		cmd.Env = append(service.AppendProxyEnv(os.Environ()), "TMPDIR=/tmp")
 	case model.DepTypeLinux:
-		cmd = exec.Command("bash", "-c", "apt-get install -y "+name+" 2>&1 || yum install -y "+name+" 2>&1 || apk add "+name+" 2>&1")
+		linuxPackageOperationMu.Lock()
+		defer linuxPackageOperationMu.Unlock()
+
+		manager, err := detectLinuxPackageManager()
+		if err != nil {
+			database.DB.Model(&model.Dependency{}).Where("id = ?", id).Updates(map[string]interface{}{
+				"status": model.DepStatusFailed,
+				"log":    err.Error(),
+			})
+			return
+		}
+
+		initialLog := fmt.Sprintf("[Linux] 已检测到包管理器：%s", manager.Binary)
+		database.DB.Model(&model.Dependency{}).Where("id = ?", id).Update("log", initialLog+"\n")
+
+		cmd, err = buildLinuxPackageCommand(manager, "install", name, false)
+		if err != nil {
+			database.DB.Model(&model.Dependency{}).Where("id = ?", id).Updates(map[string]interface{}{
+				"status": model.DepStatusFailed,
+				"log":    initialLog + "\n" + err.Error(),
+			})
+			return
+		}
 	default:
 		database.DB.Model(&model.Dependency{}).Where("id = ?", id).Updates(map[string]interface{}{
 			"status": model.DepStatusFailed,
@@ -572,11 +727,26 @@ func uninstallDependency(id uint, depType, name string) {
 	switch depType {
 	case model.DepTypeNodeJS:
 		cmd = exec.Command("npm", "uninstall", "--prefix", filepath.Join(depsDir, "nodejs"), name)
+		cmd.Env = service.AppendProxyEnv(os.Environ())
 	case model.DepTypePython:
 		pipBin := filepath.Join(depsDir, "python", "venv", "bin", "pip")
 		cmd = exec.Command(pipBin, "uninstall", "-y", name)
+		cmd.Env = service.AppendProxyEnv(os.Environ())
 	case model.DepTypeLinux:
-		cmd = exec.Command("bash", "-c", "apt-get remove -y "+name+" 2>&1 || yum remove -y "+name+" 2>&1 || apk del "+name+" 2>&1")
+		linuxPackageOperationMu.Lock()
+		defer linuxPackageOperationMu.Unlock()
+
+		manager, err := detectLinuxPackageManager()
+		if err != nil {
+			database.DB.Delete(&model.Dependency{}, id)
+			return
+		}
+
+		cmd, err = buildLinuxPackageCommand(manager, "remove", name, false)
+		if err != nil {
+			database.DB.Delete(&model.Dependency{}, id)
+			return
+		}
 	default:
 		database.DB.Delete(&model.Dependency{}, id)
 		return
@@ -591,11 +761,24 @@ func forceUninstallDependency(depType, name string) {
 	switch depType {
 	case model.DepTypeNodeJS:
 		cmd = exec.Command("npm", "uninstall", "--prefix", filepath.Join(depsDir, "nodejs"), "--force", name)
+		cmd.Env = service.AppendProxyEnv(os.Environ())
 	case model.DepTypePython:
 		pipBin := filepath.Join(depsDir, "python", "venv", "bin", "pip")
 		cmd = exec.Command(pipBin, "uninstall", "-y", "--no-deps", name)
+		cmd.Env = service.AppendProxyEnv(os.Environ())
 	case model.DepTypeLinux:
-		cmd = exec.Command("bash", "-c", "apt-get remove --force-yes -y "+name+" 2>&1 || yum remove -y "+name+" 2>&1 || apk del --force-broken-world "+name+" 2>&1")
+		linuxPackageOperationMu.Lock()
+		defer linuxPackageOperationMu.Unlock()
+
+		manager, err := detectLinuxPackageManager()
+		if err != nil {
+			return
+		}
+
+		cmd, err = buildLinuxPackageCommand(manager, "remove", name, true)
+		if err != nil {
+			return
+		}
 	default:
 		return
 	}
@@ -609,6 +792,7 @@ func (h *DepsHandler) RegisterRoutes(r *gin.RouterGroup) {
 		deps.POST("", h.Create)
 		deps.POST("/batch-delete", h.BatchDelete)
 		deps.DELETE("/:id", h.Delete)
+		deps.PUT("/:id/cancel", h.Cancel)
 		deps.GET("/:id/status", h.GetStatus)
 		deps.GET("/:id/log-stream", h.LogStream)
 		deps.PUT("/:id/reinstall", h.Reinstall)

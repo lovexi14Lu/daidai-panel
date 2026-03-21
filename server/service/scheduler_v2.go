@@ -216,7 +216,7 @@ func (s *SchedulerV2) AddJob(task *model.Task) error {
 
 	cronExpr := toCronV3(task.CronExpression)
 	if cronExpr == "" {
-		return nil
+		return fmt.Errorf("invalid cron expression")
 	}
 
 	taskID := task.ID
@@ -229,7 +229,11 @@ func (s *SchedulerV2) AddJob(task *model.Task) error {
 			TriggerType: "cron",
 			RetryIndex:  0,
 		}
-		s.Enqueue(req)
+		if err := s.Enqueue(req); err != nil {
+			log.Printf("task %d enqueue failed: %v", taskID, err)
+			return
+		}
+		database.DB.Model(&model.Task{}).Where("id = ? AND status != ?", taskID, model.TaskStatusRunning).Update("status", model.TaskStatusQueued)
 	})
 
 	if err != nil {
@@ -254,6 +258,18 @@ func (s *SchedulerV2) RemoveJob(taskID uint) {
 	}
 }
 
+func (s *SchedulerV2) HasJob(taskID uint) bool {
+	if s == nil {
+		return false
+	}
+
+	s.entryLock.RLock()
+	defer s.entryLock.RUnlock()
+
+	_, exists := s.entryMap[taskID]
+	return exists
+}
+
 func (s *SchedulerV2) RunNow(taskID uint) error {
 	var task model.Task
 	if err := database.DB.First(&task, taskID).Error; err != nil {
@@ -267,7 +283,12 @@ func (s *SchedulerV2) RunNow(taskID uint) error {
 		RetryIndex:  0,
 	}
 
-	return s.Enqueue(req)
+	if err := s.Enqueue(req); err != nil {
+		return err
+	}
+
+	database.DB.Model(&model.Task{}).Where("id = ? AND status != ?", taskID, model.TaskStatusRunning).Update("status", model.TaskStatusQueued)
+	return nil
 }
 
 func (s *SchedulerV2) GetQueueLength() int {

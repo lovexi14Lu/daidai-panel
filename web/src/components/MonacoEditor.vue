@@ -1,13 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
-import loader from '@monaco-editor/loader'
 import type * as MonacoType from 'monaco-editor'
-
-loader.config({
-  paths: {
-    vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.55.0/min/vs'
-  }
-})
+import { loadMonacoEditor } from '@/utils/monaco'
 
 const props = defineProps<{
   modelValue: string
@@ -21,6 +15,7 @@ const emit = defineEmits<{
 
 const editorRef = ref<HTMLElement>()
 const isLoading = ref(true)
+const loadError = ref('')
 let editor: MonacoType.editor.IStandaloneCodeEditor | null = null
 let monacoInstance: typeof MonacoType | null = null
 
@@ -28,11 +23,12 @@ onMounted(async () => {
   if (!editorRef.value) return
 
   try {
-    const monaco = await loader.init()
-    monacoInstance = monaco
+    loadError.value = ''
+    const { monaco, source } = await loadMonacoEditor()
+    monacoInstance = monaco as typeof MonacoType
     if (!editorRef.value) return
 
-    editor = monaco.editor.create(editorRef.value, {
+    editor = monacoInstance.editor.create(editorRef.value, {
       value: props.modelValue,
       language: props.language || 'javascript',
       theme: 'vs-dark',
@@ -45,11 +41,18 @@ onMounted(async () => {
       wordWrap: 'on',
     })
 
+    if (source === 'cdn') {
+      console.warn('Monaco 编辑器当前已回退到 CDN 资源。')
+    }
+
     editor!.onDidChangeModelContent(() => {
       if (editor) {
         emit('update:modelValue', editor.getValue())
       }
     })
+  } catch (error) {
+    console.error('Monaco 编辑器初始化失败', error)
+    loadError.value = '编辑器加载失败，请检查网络或稍后重试。'
   } finally {
     isLoading.value = false
   }
@@ -98,7 +101,10 @@ defineExpose({
       <div class="loading-spinner"></div>
       <span>编辑器加载中...</span>
     </div>
-    <div ref="editorRef" class="monaco-editor-container" v-show="!isLoading"></div>
+    <div v-else-if="loadError" class="monaco-loading monaco-error">
+      <span>{{ loadError }}</span>
+    </div>
+    <div ref="editorRef" class="monaco-editor-container" v-show="!isLoading && !loadError"></div>
   </div>
 </template>
 
@@ -127,6 +133,11 @@ defineExpose({
   font-size: 14px;
   background: #1e1e1e;
   border-radius: 4px;
+}
+
+.monaco-error {
+  color: #f56c6c;
+  text-align: center;
 }
 
 .loading-spinner {

@@ -7,6 +7,7 @@ import TaskForm from './components/TaskForm.vue'
 import LogViewer from './components/LogViewer.vue'
 import TaskDetail from './components/TaskDetail.vue'
 import LogFileBrowser from './components/LogFileBrowser.vue'
+import { getDisplayTaskLabels } from './taskLabels'
 
 const route = useRoute()
 const router = useRouter()
@@ -155,6 +156,13 @@ function getRunStatusType(status: number | null) {
 function getRunStatusText(status: number | null) {
   if (status === null) return '未运行'
   return status === 0 ? '成功' : '失败'
+}
+
+function displayTaskLabels(task: any) {
+  if (Array.isArray(task?.display_labels) && task.display_labels.length > 0) {
+    return task.display_labels
+  }
+  return getDisplayTaskLabels(task?.labels || [])
 }
 
 function openCreate() {
@@ -432,7 +440,15 @@ async function handleImport(event: Event) {
           <div class="task-name">
             <el-icon v-if="row.is_pinned" class="pin-icon" @click="handlePin(row)"><Star /></el-icon>
             <span>{{ row.name }}</span>
-            <el-tag v-for="label in row.labels" :key="label" size="small" effect="plain" class="task-label">{{ label }}</el-tag>
+            <el-tag
+              v-for="label in displayTaskLabels(row)"
+              :key="label"
+              size="small"
+              effect="plain"
+              class="task-label"
+            >
+              {{ label }}
+            </el-tag>
           </div>
         </template>
       </el-table-column>

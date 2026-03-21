@@ -1,0 +1,177 @@
+<script setup lang="ts">
+import { Document, Setting, Upload } from '@element-plus/icons-vue'
+import type { SettingsConfigForm } from '../types'
+
+defineProps<{
+  configsLoading: boolean
+  configsSaving: boolean
+  form: SettingsConfigForm
+  onSave: () => void
+  onIconUpload: (file: File) => boolean
+  onLogBackgroundUpload: (file: File) => boolean
+}>()
+</script>
+
+<template>
+  <el-card shadow="never" v-loading="configsLoading">
+    <template #header>
+      <div class="card-header">
+        <span class="card-title"><el-icon><Setting /></el-icon> 系统配置</span>
+        <el-button type="primary" :loading="configsSaving" @click="onSave">
+          <el-icon><Document /></el-icon>保存配置
+        </el-button>
+      </div>
+    </template>
+
+    <div class="config-section">
+      <h4 class="section-title">面板设置</h4>
+      <div class="form-field">
+        <label>面板标题</label>
+        <el-input v-model="form.panel_title" placeholder="呆呆面板" />
+        <span class="form-hint">自定义面板的站点标题，留空使用默认值"呆呆面板"</span>
+      </div>
+      <div class="form-field">
+        <label>面板图标 (SVG)</label>
+        <div style="display: flex; align-items: center; gap: 12px">
+          <el-upload
+            :show-file-list="false"
+            :before-upload="onIconUpload"
+            accept=".svg"
+          >
+            <el-button size="small"><el-icon><Upload /></el-icon>上传 SVG 图标</el-button>
+          </el-upload>
+          <div v-if="form.panel_icon" class="icon-preview">
+            <img :src="form.panel_icon" alt="icon" style="width: 32px; height: 32px" />
+            <el-button size="small" text type="danger" @click="form.panel_icon = ''">移除</el-button>
+          </div>
+        </div>
+        <span class="form-hint">上传 SVG 格式图标自定义面板图标，留空使用默认图标</span>
+      </div>
+      <div class="form-field">
+        <label>日志背景颜色</label>
+        <div class="log-bg-controls">
+          <el-color-picker v-model="form.log_background_color" show-alpha />
+          <el-input v-model="form.log_background_color" placeholder="#0f172a" />
+        </div>
+        <span class="form-hint">统一应用到任务日志和执行日志查看器，建议使用深色以保证文本可读性</span>
+      </div>
+      <div class="form-field">
+        <label>日志背景图片</label>
+        <div class="log-bg-upload">
+          <el-upload
+            :show-file-list="false"
+            :before-upload="onLogBackgroundUpload"
+            accept="image/*"
+          >
+            <el-button size="small"><el-icon><Upload /></el-icon>上传背景图</el-button>
+          </el-upload>
+          <el-button v-if="form.log_background_image" size="small" text type="danger" @click="form.log_background_image = ''">
+            移除背景图
+          </el-button>
+        </div>
+        <div
+          class="log-bg-preview dd-log-surface"
+          :style="{
+            backgroundColor: form.log_background_color || '#0f172a',
+            backgroundImage: form.log_background_image
+              ? `radial-gradient(circle at top right, rgba(148, 163, 184, 0.16), transparent 24%), linear-gradient(155deg, rgba(15, 23, 42, 0.88), rgba(30, 41, 59, 0.76)), url('${form.log_background_image}')`
+              : undefined
+          }"
+        >
+          <div class="log-bg-preview__content">任务输出预览：日志背景将应用到所有日志查看器</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="config-section">
+      <h4 class="section-title">订阅设置</h4>
+      <div class="switch-row">
+        <div class="switch-item">
+          <span class="switch-label">自动添加定时任务</span>
+          <el-switch v-model="form.auto_add_cron" inline-prompt active-text="开" inactive-text="关" />
+        </div>
+        <div class="switch-item">
+          <span class="switch-label">自动删除失效任务</span>
+          <el-switch v-model="form.auto_del_cron" inline-prompt active-text="开" inactive-text="关" />
+        </div>
+      </div>
+      <div class="form-field">
+        <label>默认 Cron 规则</label>
+        <el-input v-model="form.default_cron_rule" placeholder="0 9 * * *" />
+        <span class="form-hint">匹配不到定时规则时使用，如 0 9 * * *</span>
+      </div>
+      <div class="form-field">
+        <label>拉取文件后缀</label>
+        <el-input v-model="form.repo_file_extensions" placeholder="py js sh ts" />
+        <span class="form-hint">空格分隔，如 py js sh ts</span>
+      </div>
+    </div>
+
+    <div class="config-section">
+      <h4 class="section-title">资源告警</h4>
+      <el-row :gutter="16">
+        <el-col :span="8">
+          <div class="form-field">
+            <label>CPU 阈值 (%)</label>
+            <el-input v-model.number="form.cpu_warn" />
+          </div>
+        </el-col>
+        <el-col :span="8">
+          <div class="form-field">
+            <label>内存阈值 (%)</label>
+            <el-input v-model.number="form.memory_warn" />
+          </div>
+        </el-col>
+        <el-col :span="8">
+          <div class="form-field">
+            <label>磁盘阈值 (%)</label>
+            <el-input v-model.number="form.disk_warn" />
+          </div>
+        </el-col>
+      </el-row>
+      <div class="switch-row">
+        <div class="switch-item">
+          <span class="switch-label">资源超限发送通知</span>
+          <el-switch v-model="form.notify_on_resource_warn" inline-prompt active-text="开" inactive-text="关" />
+        </div>
+      </div>
+      <div class="switch-row">
+        <div class="switch-item">
+          <span class="switch-label">登录成功发送通知</span>
+          <el-switch v-model="form.notify_on_login" inline-prompt active-text="开" inactive-text="关" />
+        </div>
+      </div>
+      <span class="form-hint">开启后，每次登录成功将向所有已启用的通知渠道发送通知</span>
+    </div>
+  </el-card>
+</template>
+
+<style scoped lang="scss">
+@use './config-card-shared.scss' as *;
+
+.log-bg-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.log-bg-upload {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.log-bg-preview {
+  padding: 18px;
+  min-height: 92px;
+  overflow: hidden;
+}
+
+.log-bg-preview__content {
+  font-family: var(--dd-font-mono);
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+</style>

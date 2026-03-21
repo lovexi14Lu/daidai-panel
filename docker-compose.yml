@@ -1,15 +1,14 @@
+name: daidai-panel
+
 services:
   daidai-panel:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: daidai-panel:latest
+    image: linzixuanzz/daidai-panel:latest
     container_name: daidai-panel
     restart: unless-stopped
     ports:
-      - "5700:5700"
+      - "5700:5700" # 宿主机端口:容器内 Nginx 端口
     volumes:
-      - ./data:/app/data
+      - ./Dumb-Panel:/app/Dumb-Panel
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - TZ=Asia/Shanghai

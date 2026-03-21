@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"strings"
 	"time"
 
 	"daidai-panel/database"
@@ -27,6 +28,12 @@ func silentDB() *gorm.DB {
 }
 
 func GetConfig(key string, defaultValue string) string {
+	if defaultValue == "" {
+		if def, exists := GetSystemConfigDefinition(key); exists {
+			defaultValue = def.DefaultValue
+		}
+	}
+
 	var cfg SystemConfig
 	if err := silentDB().Where("`key` = ?", key).First(&cfg).Error; err != nil {
 		return defaultValue
@@ -53,41 +60,73 @@ func GetConfigInt(key string, defaultValue int) int {
 	return result
 }
 
+func GetConfigBool(key string, defaultValue bool) bool {
+	val := GetConfig(key, "")
+	if val == "" {
+		return defaultValue
+	}
+
+	parsed, ok := parseBoolString(val)
+	if !ok {
+		return defaultValue
+	}
+	return parsed
+}
+
 func SetConfig(key, value string) error {
+	normalized, err := NormalizeSystemConfigValue(key, value)
+	if err != nil {
+		return err
+	}
+
 	var cfg SystemConfig
 	if err := silentDB().Where("`key` = ?", key).First(&cfg).Error; err != nil {
-		cfg = SystemConfig{Key: key, Value: value}
+		cfg = SystemConfig{Key: key, Value: normalized}
+		if def, exists := GetSystemConfigDefinition(key); exists {
+			cfg.Description = def.Description
+		}
 		return database.DB.Create(&cfg).Error
 	}
-	return database.DB.Model(&cfg).Update("value", value).Error
+
+	updates := map[string]interface{}{"value": normalized}
+	if def, exists := GetSystemConfigDefinition(key); exists && cfg.Description != def.Description {
+		updates["description"] = def.Description
+	}
+
+	return database.DB.Model(&cfg).Updates(updates).Error
 }
 
 func InitDefaultConfigs() {
-	defaults := map[string]struct {
-		Value       string
-		Description string
-	}{
-		"max_concurrent_tasks":    {"5", "定时任务最大并发数"},
-		"command_timeout":         {"300", "全局默认超时（秒）"},
-		"log_retention_days":      {"7", "日志保留天数"},
-		"cpu_warn":                {"80", "CPU 告警阈值（%）"},
-		"memory_warn":             {"80", "内存告警阈值（%）"},
-		"disk_warn":               {"90", "磁盘告警阈值（%）"},
-		"auto_add_cron":           {"true", "自动添加定时任务"},
-		"auto_del_cron":           {"true", "自动删除失效任务"},
-		"notify_on_resource_warn": {"false", "资源超限发送通知"},
-		"notify_on_login":         {"false", "登录成功发送通知"},
-	}
-
 	db := silentDB()
-	for key, cfg := range defaults {
+	for _, def := range SystemConfigDefinitions() {
 		var existing SystemConfig
-		if err := db.Where("`key` = ?", key).First(&existing).Error; err != nil && errors.Is(err, gorm.ErrRecordNotFound) {
+		if err := db.Where("`key` = ?", def.Key).First(&existing).Error; err != nil && errors.Is(err, gorm.ErrRecordNotFound) {
 			database.DB.Create(&SystemConfig{
-				Key:         key,
-				Value:       cfg.Value,
-				Description: cfg.Description,
+				Key:         def.Key,
+				Value:       def.DefaultValue,
+				Description: def.Description,
 			})
+			continue
+		}
+
+		normalizedValue := existing.Value
+		if normalizedValue == "" {
+			normalizedValue = def.DefaultValue
+		} else if normalized, err := NormalizeSystemConfigValue(def.Key, existing.Value); err == nil {
+			normalizedValue = normalized
+		} else {
+			normalizedValue = def.DefaultValue
+		}
+
+		updates := map[string]interface{}{}
+		if strings.TrimSpace(existing.Description) != def.Description {
+			updates["description"] = def.Description
+		}
+		if normalizedValue != existing.Value {
+			updates["value"] = normalizedValue
+		}
+		if len(updates) > 0 {
+			database.DB.Model(&existing).Updates(updates)
 		}
 	}
 }

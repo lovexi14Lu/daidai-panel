@@ -36,7 +36,7 @@ type Scheduler struct {
 var scheduler *Scheduler
 
 func InitScheduler() {
-	maxConcurrent := model.GetConfigInt("max_concurrent_tasks", 5)
+	maxConcurrent := model.GetRegisteredConfigInt("max_concurrent_tasks")
 
 	scheduler = &Scheduler{
 		cron:             cron.New(cron.WithSeconds(), cron.WithChain(cron.Recover(cron.DefaultLogger))),
@@ -228,9 +228,9 @@ func (s *Scheduler) executeTaskInner(taskID uint) {
 		}
 	}
 
-	randomDelay := model.GetConfigInt("random_delay", 0)
-	commandTimeout := model.GetConfigInt("command_timeout", 300)
-	maxLogSize := model.GetConfigInt("max_log_content_size", 102400)
+	randomDelay := model.GetRegisteredConfigInt("random_delay")
+	commandTimeout := model.GetRegisteredConfigInt("command_timeout")
+	maxLogSize := model.GetRegisteredConfigInt("max_log_content_size")
 
 	if randomDelay > 0 {
 		delay := rand.Intn(randomDelay) + 1

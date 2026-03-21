@@ -57,18 +57,32 @@ func GenerateAccessTokenInfo(username, role string) (*TokenInfo, error) {
 }
 
 func GenerateRefreshToken(username, role string) (string, error) {
+	info, err := GenerateRefreshTokenInfo(username, role)
+	if err != nil {
+		return "", err
+	}
+	return info.Token, nil
+}
+
+func GenerateRefreshTokenInfo(username, role string) (*TokenInfo, error) {
+	jti := generateJTI()
+	expiresAt := time.Now().Add(config.C.JWT.RefreshTokenExpire)
 	claims := Claims{
 		Username:  username,
 		Role:      role,
 		TokenType: "refresh",
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(config.C.JWT.RefreshTokenExpire)),
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			ID:        generateJTI(),
+			ID:        jti,
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString([]byte(config.C.JWT.Secret))
+	tokenStr, err := token.SignedString([]byte(config.C.JWT.Secret))
+	if err != nil {
+		return nil, err
+	}
+	return &TokenInfo{Token: tokenStr, JTI: jti, ExpiresAt: expiresAt}, nil
 }
 
 func ParseToken(tokenString string) (*Claims, error) {
@@ -84,24 +98,23 @@ func ParseToken(tokenString string) (*Claims, error) {
 	return nil, jwt.ErrSignatureInvalid
 }
 
-func isTokenBlocked(jti string) bool {
+func IsTokenBlocked(jti string) bool {
 	var count int64
 	database.DB.Model(&model.TokenBlocklist{}).Where("jti = ?", jti).Count(&count)
 	return count > 0
 }
 
+func ExtractBearerToken(authHeader string) string {
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		return ""
+	}
+
+	return strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
+}
+
 func JWTAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		tokenStr := ""
-
-		authHeader := c.GetHeader("Authorization")
-		if strings.HasPrefix(authHeader, "Bearer ") {
-			tokenStr = strings.TrimPrefix(authHeader, "Bearer ")
-		}
-
-		if tokenStr == "" {
-			tokenStr = c.Query("token")
-		}
+		tokenStr := ExtractBearerToken(c.GetHeader("Authorization"))
 
 		if tokenStr == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "缺少授权令牌"})
@@ -122,7 +135,7 @@ func JWTAuth() gin.HandlerFunc {
 			return
 		}
 
-		if isTokenBlocked(claims.ID) {
+		if IsTokenBlocked(claims.ID) {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "令牌已被撤销"})
 			c.Abort()
 			return
@@ -131,6 +144,11 @@ func JWTAuth() gin.HandlerFunc {
 		c.Set("username", claims.Username)
 		c.Set("role", claims.Role)
 		c.Set("jti", claims.ID)
+		if isAppToken(claims.Username, claims.Role) {
+			c.Set("token_kind", "app")
+		} else {
+			c.Set("token_kind", "user")
+		}
 		c.Next()
 	}
 }
@@ -162,8 +180,14 @@ func RequireRole(minRole string) gin.HandlerFunc {
 			return
 		}
 
-		if strings.HasPrefix(role.(string), "app:") {
-			c.Next()
+		if c.GetString("token_kind") == "app" {
+			if c.GetBool("app_scope_authorized") {
+				c.Next()
+				return
+			}
+
+			c.JSON(http.StatusForbidden, gin.H{"error": "应用令牌无权访问此接口"})
+			c.Abort()
 			return
 		}
 

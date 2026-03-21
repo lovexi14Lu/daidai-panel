@@ -20,6 +20,7 @@ import (
 var panelStartTime = time.Now()
 
 type ResourceInfo struct {
+	Hostname    string  `json:"hostname"`
 	CPUUsage    float64 `json:"cpu_usage"`
 	MemoryTotal uint64  `json:"memory_total"`
 	MemoryUsed  uint64  `json:"memory_used"`
@@ -40,12 +41,17 @@ type ResourceInfo struct {
 
 func GetResourceInfo() ResourceInfo {
 	info := ResourceInfo{
+		Hostname:   "-",
 		GoRoutines: runtime.NumGoroutine(),
 		GoVersion:  runtime.Version(),
 		OS:         runtime.GOOS,
 		Arch:       runtime.GOARCH,
 		NumCPU:     runtime.NumCPU(),
 		Uptime:     getPanelUptime(),
+	}
+
+	if hostname, err := os.Hostname(); err == nil && hostname != "" {
+		info.Hostname = hostname
 	}
 
 	if config.C != nil {
@@ -72,6 +78,18 @@ func GetResourceInfo() ResourceInfo {
 	}
 
 	return info
+}
+
+func CountScriptFiles(scriptsDir string) int64 {
+	var count int64
+	filepath.Walk(scriptsDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info == nil || info.IsDir() {
+			return nil
+		}
+		count++
+		return nil
+	})
+	return count
 }
 
 func getPanelUptime() string {
@@ -203,7 +221,7 @@ func resourceWatchLoop() {
 }
 
 func checkResourceThresholds() {
-	if model.GetConfig("notify_on_resource_warn", "false") != "true" {
+	if !model.GetRegisteredConfigBool("notify_on_resource_warn") {
 		return
 	}
 
@@ -212,9 +230,9 @@ func checkResourceThresholds() {
 	}
 
 	info := GetResourceInfo()
-	cpuThreshold := float64(model.GetConfigInt("cpu_warn", 80))
-	memThreshold := float64(model.GetConfigInt("memory_warn", 80))
-	diskThreshold := float64(model.GetConfigInt("disk_warn", 90))
+	cpuThreshold := float64(model.GetRegisteredConfigInt("cpu_warn"))
+	memThreshold := float64(model.GetRegisteredConfigInt("memory_warn"))
+	diskThreshold := float64(model.GetRegisteredConfigInt("disk_warn"))
 
 	var warnings []string
 	if info.CPUUsage > cpuThreshold {

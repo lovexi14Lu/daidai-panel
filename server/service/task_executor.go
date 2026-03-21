@@ -48,8 +48,9 @@ func (e *TaskExecutor) OnTaskExecuting(req *ExecutionRequest) error {
 		}
 	}
 
-	randomDelay := model.GetConfigInt("random_delay", 0)
-	if randomDelay > 0 {
+	randomDelay := model.GetRegisteredConfigInt("random_delay")
+	delayExts := parseTaskExtensions(model.GetRegisteredConfig("random_delay_extensions"))
+	if randomDelay > 0 && shouldApplyRandomDelay(task.Command, delayExts) {
 		delay := rand.Intn(randomDelay) + 1
 		time.Sleep(time.Duration(delay) * time.Second)
 	}
@@ -98,7 +99,7 @@ func (e *TaskExecutor) OnTaskFailed(req *ExecutionRequest, err error) {
 
 	task := req.Task
 	database.DB.Model(task).Updates(map[string]interface{}{
-		"status": model.TaskStatusEnabled,
+		"status": ResolveTaskInactiveStatus(task),
 	})
 }
 
@@ -170,8 +171,8 @@ func (e *TaskExecutor) runTask(req *ExecutionRequest, taskLog *model.TaskLog, ti
 		}
 	}
 
-	commandTimeout := model.GetConfigInt("command_timeout", 86400)
-	maxLogSize := model.GetConfigInt("max_log_content_size", 102400)
+	commandTimeout := model.GetRegisteredConfigInt("command_timeout")
+	maxLogSize := model.GetRegisteredConfigInt("max_log_content_size")
 
 	timeout := task.Timeout
 	if timeout <= 0 {
@@ -208,8 +209,9 @@ func (e *TaskExecutor) runTask(req *ExecutionRequest, taskLog *model.TaskLog, ti
 			runStatus = model.RunFailed
 		}
 
+		inactiveStatus := ResolveTaskInactiveStatus(task)
 		database.DB.Model(task).Updates(map[string]interface{}{
-			"status":            model.TaskStatusEnabled,
+			"status":            inactiveStatus,
 			"last_run_status":   runStatus,
 			"last_running_time": duration,
 			"pid":               nil,
@@ -309,7 +311,7 @@ func (e *TaskExecutor) runTask(req *ExecutionRequest, taskLog *model.TaskLog, ti
 			break
 		}
 
-		if depInstallCount < maxDepInstalls && model.GetConfigInt("auto_install_deps", 1) == 1 {
+		if depInstallCount < maxDepInstalls && model.GetRegisteredConfigBool("auto_install_deps") {
 			collected := outputCollector.String()
 			if e.detectAndInstallDeps(collected, envVars, onOutput) {
 				depInstallCount++
@@ -350,20 +352,21 @@ func (e *TaskExecutor) detectAndInstallDeps(output string, envVars map[string]st
 
 	if matches := pyModuleRe.FindStringSubmatch(output); len(matches) > 1 {
 		modName := strings.Split(matches[1], ".")[0]
-		onOutput(fmt.Sprintf("[自动安装 Python 依赖: %s]", modName))
+		installName := ResolvePythonAutoInstallPackage(modName)
+		onOutput(fmt.Sprintf("[自动安装 Python 依赖: %s -> %s]", modName, installName))
 		venvPip := filepath.Join(depsDir, "python", "venv", "bin", "pip3")
 		if _, err := os.Stat(venvPip); err != nil {
 			venvPip = "pip3"
 		}
-		cmd := exec.Command(venvPip, "install", modName)
+		cmd := exec.Command(venvPip, "install", installName)
 		cmd.Env = buildEnvSlice(envVars)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			onOutput(fmt.Sprintf("[安装失败: %s]", strings.TrimSpace(string(out))))
 		} else {
-			onOutput(fmt.Sprintf("[安装成功: %s]", modName))
+			onOutput(fmt.Sprintf("[安装成功: %s]", installName))
 			installed = true
-			RecordAutoInstalledDep(model.DepTypePython, modName, string(out))
+			RecordAutoInstalledDep(model.DepTypePython, installName, string(out))
 		}
 	}
 
@@ -414,4 +417,50 @@ func buildEnvSlice(envVars map[string]string) []string {
 		env = append(env, k+"="+v)
 	}
 	return env
+}
+
+func parseTaskExtensions(raw string) map[string]bool {
+	exts := make(map[string]bool)
+	for _, token := range strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';' || r == '\n' || r == '\r' || r == '\t' || r == ' '
+	}) {
+		token = strings.TrimSpace(strings.ToLower(token))
+		token = strings.TrimPrefix(token, "*")
+		if token == "" {
+			continue
+		}
+		if !strings.HasPrefix(token, ".") {
+			token = "." + token
+		}
+		exts[token] = true
+	}
+	return exts
+}
+
+func shouldApplyRandomDelay(command string, allowedExts map[string]bool) bool {
+	if len(allowedExts) == 0 {
+		return true
+	}
+
+	scriptPath := extractTaskScriptPath(command)
+	if scriptPath == "" {
+		return false
+	}
+
+	ext := strings.ToLower(filepath.Ext(scriptPath))
+	return allowedExts[ext]
+}
+
+func extractTaskScriptPath(command string) string {
+	parts := strings.Fields(strings.TrimSpace(command))
+	if len(parts) < 2 {
+		return ""
+	}
+
+	switch parts[0] {
+	case "task", "desi", "python", "python3", "node", "ts-node", "bash":
+		return strings.Join(parts[1:], " ")
+	default:
+		return ""
+	}
 }
