@@ -33,6 +33,7 @@ const editForm = ref({
   whitelist: '',
   blacklist: '',
   depend_on: '',
+  hook_script: '',
   auto_add_task: false,
   auto_del_task: false,
   save_dir: '',
@@ -106,7 +107,7 @@ function openCreate() {
   qlCommand.value = ''
   editForm.value = {
     id: 0, name: '', type: 'git-repo', url: '', branch: '', schedule: '',
-    whitelist: '', blacklist: '', depend_on: '', auto_add_task: false,
+    whitelist: '', blacklist: '', depend_on: '', hook_script: '', auto_add_task: false,
     auto_del_task: false, save_dir: '', ssh_key_id: null, alias: ''
   }
   showEditDialog.value = true
@@ -121,34 +122,65 @@ function addGithubMirror(url: string): string {
   return url
 }
 
+function deriveSubscriptionSaveDir(url: string): string {
+  const trimmed = url.trim().replace(/\/+$/, '').replace(/\.git$/i, '')
+  if (!trimmed) return ''
+  const parts = trimmed.split('/').filter(Boolean)
+  if (parts.length >= 2) {
+    const owner = parts[parts.length - 2]
+    const repo = parts[parts.length - 1]
+    if (owner && repo) {
+      return `${owner}_${repo}`
+    }
+  }
+  return parts[parts.length - 1] || ''
+}
+
+function normalizeRecognizedHookScript(raw: string): string {
+  return raw.replace(/(?:\$\{?QL_DIR\}?|%QL_DIR%)[/\\]data[/\\](?:repo|scripts)[/\\][^/\\"'\s;]+/g, '$SUB_DIR').trim()
+}
+
 function parseQLCommand() {
   const cmd = qlCommand.value.trim()
   if (!cmd) return
 
-  const repoMatch = cmd.match(/ql\s+repo\s+"?([^\s"]+)"?\s*"?([^"]*)"?\s*"?([^"]*)"?\s*"?([^"]*)"?\s*"?([^"]*)"?/)
+  const lines = cmd
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+  const qlLine = lines.find(line => /^ql\s+(repo|raw)\b/.test(line)) || cmd
+  const hookScript = normalizeRecognizedHookScript(
+    lines.filter(line => line !== qlLine && !/^ql\s+(repo|raw)\b/.test(line)).join(' ; ')
+  )
+
+  const repoMatch = qlLine.match(/ql\s+repo\s+"?([^\s"]+)"?\s*"?([^"]*)"?\s*"?([^"]*)"?\s*"?([^"]*)"?\s*"?([^"]*)"?/)
   if (repoMatch) {
     const [, url = '', whitelist, blacklist, dependOn, branch] = repoMatch
     const repoName = url.replace(/\.git$/, '').split('/').pop() || 'repo'
     editForm.value.type = 'git-repo'
     editForm.value.url = addGithubMirror(url)
     editForm.value.name = repoName
+    editForm.value.save_dir = deriveSubscriptionSaveDir(url)
     editForm.value.whitelist = whitelist || ''
     editForm.value.blacklist = blacklist || ''
     editForm.value.branch = branch || ''
     editForm.value.depend_on = dependOn || ''
+    if (hookScript) editForm.value.hook_script = hookScript
     editForm.value.auto_add_task = true
     ElMessage.success('已识别 ql repo 命令')
     qlCommand.value = ''
     return
   }
 
-  const rawMatch = cmd.match(/ql\s+raw\s+"?([^\s"]+)"?/)
+  const rawMatch = qlLine.match(/ql\s+raw\s+"?([^\s"]+)"?/)
   if (rawMatch) {
     const url = rawMatch[1] || ''
     const fileName = url.split('/').pop() || 'file'
     editForm.value.type = 'single-file'
     editForm.value.url = addGithubMirror(url)
     editForm.value.name = fileName.replace(/\.[^/.]+$/, '')
+    editForm.value.save_dir = deriveSubscriptionSaveDir(url) || 'downloads'
+    if (hookScript) editForm.value.hook_script = hookScript
     editForm.value.auto_add_task = true
     ElMessage.success('已识别 ql raw 命令')
     qlCommand.value = ''
@@ -159,6 +191,7 @@ function parseQLCommand() {
     editForm.value.url = addGithubMirror(cmd)
     const repoName = cmd.replace(/\.git$/, '').split('/').pop() || ''
     if (repoName) editForm.value.name = repoName
+    editForm.value.save_dir = deriveSubscriptionSaveDir(cmd)
     editForm.value.type = cmd.endsWith('.js') || cmd.endsWith('.py') || cmd.endsWith('.ts') || cmd.endsWith('.sh') ? 'single-file' : 'git-repo'
     ElMessage.success('已识别链接')
     qlCommand.value = ''
@@ -174,7 +207,7 @@ function openEdit(row: any) {
     id: row.id, name: row.name, type: row.type, url: row.url,
     branch: row.branch || '', schedule: row.schedule || '',
     whitelist: row.whitelist || '', blacklist: row.blacklist || '',
-    depend_on: row.depend_on || '', auto_add_task: row.auto_add_task,
+    depend_on: row.depend_on || '', hook_script: row.hook_script || '', auto_add_task: row.auto_add_task,
     auto_del_task: row.auto_del_task, save_dir: row.save_dir || '',
     ssh_key_id: row.ssh_key_id, alias: row.alias || ''
   }
@@ -224,13 +257,23 @@ async function handleDelete(id: number) {
 
 async function handleToggle(row: any) {
   try {
+    const enabling = !row.enabled
+    await ElMessageBox.confirm(
+      enabling
+        ? `确认启用订阅「${row.name}」吗？`
+        : `确认禁用订阅「${row.name}」吗？禁用后将停止后续自动拉取。`,
+      enabling ? '启用确认' : '禁用确认',
+      { type: enabling ? 'info' : 'warning' }
+    )
     if (row.enabled) {
       await subscriptionApi.disable(row.id)
     } else {
       await subscriptionApi.enable(row.id)
     }
+    ElMessage.success(row.enabled ? '已禁用' : '已启用')
     loadData()
-  } catch {
+  } catch (err: any) {
+    if (err === 'cancel' || err?.toString?.() === 'cancel') return
     ElMessage.error('操作失败')
   }
 }
@@ -434,6 +477,10 @@ function viewLogDetail(log: any) {
               </div>
             </div>
             <div class="dd-mobile-card__field">
+              <span class="dd-mobile-card__label">定时拉取</span>
+              <span class="dd-mobile-card__value">{{ row.schedule || '手动拉取' }}</span>
+            </div>
+            <div class="dd-mobile-card__field">
               <span class="dd-mobile-card__label">启用</span>
               <div class="dd-mobile-card__value">
                 <el-switch :model-value="row.enabled" size="small" @change="handleToggle(row)" />
@@ -475,6 +522,11 @@ function viewLogDetail(log: any) {
       </el-table-column>
       <el-table-column prop="url" label="URL" min-width="250" show-overflow-tooltip />
       <el-table-column prop="branch" label="分支" width="100" />
+      <el-table-column prop="schedule" label="定时拉取" min-width="160" show-overflow-tooltip>
+        <template #default="{ row }">
+          {{ row.schedule || '手动拉取' }}
+        </template>
+      </el-table-column>
       <el-table-column label="状态" width="80" align="center">
         <template #default="{ row }">
           <el-tag size="small" :type="getStatusTag(row.status)">{{ getStatusText(row.status) }}</el-tag>
@@ -572,6 +624,17 @@ function viewLogDetail(log: any) {
         </el-form-item>
         <el-form-item label="黑名单">
           <el-input v-model="editForm.blacklist" placeholder="文件名黑名单 (逗号分隔)" />
+        </el-form-item>
+        <el-form-item label="依赖说明">
+          <el-input v-model="editForm.depend_on" placeholder="用于记录订阅依赖、过滤说明或迁移信息" />
+        </el-form-item>
+        <el-form-item label="拉取后钩子">
+          <el-input
+            v-model="editForm.hook_script"
+            type="textarea"
+            :rows="4"
+            placeholder="拉取成功后执行的 Shell 命令。支持使用 $SUB_DIR、$SCRIPTS_DIR、$QL_DIR 等变量。"
+          />
         </el-form-item>
       </el-form>
       <template #footer>

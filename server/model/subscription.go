@@ -19,6 +19,7 @@ type Subscription struct {
 	Whitelist   string     `gorm:"size:512;default:''" json:"whitelist"`
 	Blacklist   string     `gorm:"size:512;default:''" json:"blacklist"`
 	DependOn    string     `gorm:"size:512;default:''" json:"depend_on"`
+	HookScript  string     `gorm:"type:text;default:''" json:"hook_script"`
 	AutoAddTask bool       `gorm:"default:false" json:"auto_add_task"`
 	AutoDelTask bool       `gorm:"default:false" json:"auto_del_task"`
 	Enabled     bool       `gorm:"default:true" json:"enabled"`
@@ -46,6 +47,7 @@ func (s *Subscription) ToDict() map[string]interface{} {
 		"whitelist":     s.Whitelist,
 		"blacklist":     s.Blacklist,
 		"depend_on":     s.DependOn,
+		"hook_script":   s.HookScript,
 		"auto_add_task": s.AutoAddTask,
 		"auto_del_task": s.AutoDelTask,
 		"enabled":       s.Enabled,

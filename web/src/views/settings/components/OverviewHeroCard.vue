@@ -61,6 +61,15 @@ defineProps<{
         >
           <div v-if="updateInfo.has_update">
             <p>发布时间: {{ new Date(updateInfo.published_at).toLocaleString() }}</p>
+            <p v-if="updateInfo.update_target?.mirror_host" class="update-meta">
+              系统更新镜像源：{{ updateInfo.update_target.mirror_host }}
+            </p>
+            <p
+              v-if="updateInfo.update_target?.pull_image_name && updateInfo.update_target.pull_image_name !== updateInfo.update_target.image_name"
+              class="update-meta"
+            >
+              拉取目标：{{ updateInfo.update_target.pull_image_name }}
+            </p>
             <p v-if="!updateInfo.auto_update_supported" class="update-disabled-reason">
               当前部署暂不支持面板内一键更新：{{ updateInfo.update_disabled_reason || '请改用手动更新' }}
             </p>
@@ -90,6 +99,9 @@ defineProps<{
           <p>{{ updateStatus.message }}</p>
           <p v-if="updateStatus.container_name || updateStatus.image_name" class="update-meta">
             {{ updateStatus.container_name || '-' }} / {{ updateStatus.image_name || '-' }}
+          </p>
+          <p v-if="updateStatus.mirror_host" class="update-meta">
+            系统更新镜像源：{{ updateStatus.mirror_host }}
           </p>
         </el-alert>
       </div>

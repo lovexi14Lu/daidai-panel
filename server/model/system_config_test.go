@@ -40,11 +40,21 @@ func TestSetConfigNormalizesRegisteredValues(t *testing.T) {
 		t.Fatalf("expected canonical trusted_proxy_cidrs, got %q", got)
 	}
 
+	if err := model.SetConfig("update_image_mirror", "https://docker.1ms.run/"); err != nil {
+		t.Fatalf("set update_image_mirror: %v", err)
+	}
+	if got := model.GetRegisteredConfig("update_image_mirror"); got != "docker.1ms.run" {
+		t.Fatalf("expected canonical update_image_mirror docker.1ms.run, got %q", got)
+	}
+
 	if err := model.SetConfig("default_cron_rule", "invalid cron"); err == nil {
 		t.Fatal("expected invalid default_cron_rule to be rejected")
 	}
 	if err := model.SetConfig("trusted_proxy_cidrs", "not-an-ip"); err == nil {
 		t.Fatal("expected invalid trusted_proxy_cidrs to be rejected")
+	}
+	if err := model.SetConfig("update_image_mirror", "https://docker.1ms.run/proxy"); err == nil {
+		t.Fatal("expected update_image_mirror with path to be rejected")
 	}
 }
 

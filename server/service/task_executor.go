@@ -465,6 +465,7 @@ func buildTaskExecutionNotification(task *model.Task, taskLogID uint, success bo
 		"result_summary": summaryLine,
 		"error_log":      failureExcerpt,
 		"failure_log":    failureExcerpt,
+		"reason":         failureExcerpt,
 		"failure_reason": failureExcerpt,
 	}
 	return title, content, context

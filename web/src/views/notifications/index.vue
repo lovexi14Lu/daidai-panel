@@ -91,6 +91,7 @@ const configFields = computed(() => {
         { label: '文件', value: 'file' },
         { label: '视频', value: 'video' },
         { label: '图文', value: 'news' },
+        { label: '图文消息 (mpnews)', value: 'mpnews' },
         { label: '模版卡片', value: 'template_card' },
       ]},
       ...((wecomAppMsgType === 'text' || wecomAppMsgType === 'markdown') ? [
@@ -102,12 +103,16 @@ const configFields = computed(() => {
       ...(wecomAppMsgType === 'news' ? [
         { key: 'news_articles', label: '图文 Articles(JSON)', type: 'textarea', placeholder: '[{\"title\":\"{{title}}\",\"description\":\"{{content}}\",\"url\":\"https://example.com\",\"picurl\":\"https://example.com/demo.png\"}]' },
       ] : []),
+      ...(wecomAppMsgType === 'mpnews' ? [
+        { key: 'mpnews_articles', label: '图文消息 Articles(JSON)', type: 'textarea', placeholder: '[{\"title\":\"{{title}}\",\"thumb_media_id\":\"MEDIA_ID\",\"author\":\"Author\",\"content_source_url\":\"https://example.com\",\"content\":\"<p>{{content}}</p>\",\"digest\":\"Digest description\"}]' },
+      ] : []),
       ...(wecomAppMsgType === 'template_card' ? [
         { key: 'template_card_payload', label: '卡片配置(JSON)', type: 'textarea', placeholder: '{\"card_type\":\"text_notice\",\"main_title\":{\"title\":\"{{title}}\",\"desc\":\"{{content}}\"}}' },
       ] : []),
       { key: 'safe', label: '保密消息', type: 'select', placeholder: '默认 0', options: [
         { label: '否 (0)', value: '0' },
         { label: '是 (1)', value: '1' },
+        ...(wecomAppMsgType === 'mpnews' ? [{ label: '仅企业内分享 (2)', value: '2' }] : []),
       ]},
       { key: 'enable_id_trans', label: 'ID 转译', type: 'select', placeholder: '默认 0', options: [
         { label: '关闭 (0)', value: '0' },
@@ -323,13 +328,23 @@ async function handleDeleteChannel(id: number) {
 
 async function handleToggleChannel(row: any) {
   try {
+    const enabling = !row.enabled
+    await ElMessageBox.confirm(
+      enabling
+        ? `确认启用通知渠道「${row.name}」吗？`
+        : `确认禁用通知渠道「${row.name}」吗？禁用后将不再接收任务推送。`,
+      enabling ? '启用确认' : '禁用确认',
+      { type: enabling ? 'info' : 'warning' }
+    )
     if (row.enabled) {
       await notificationApi.disable(row.id)
     } else {
       await notificationApi.enable(row.id)
     }
+    ElMessage.success(row.enabled ? '已禁用' : '已启用')
     loadChannels()
-  } catch {
+  } catch (err: any) {
+    if (err === 'cancel' || err?.toString?.() === 'cancel') return
     ElMessage.error('操作失败')
   }
 }

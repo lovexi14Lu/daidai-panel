@@ -34,13 +34,15 @@ func (h *TaskHandler) Batch(c *gin.Context) {
 		case "enable":
 			task.Status = model.TaskStatusEnabled
 			database.DB.Save(&task)
-			scheduler.AddJob(&task)
+			if scheduler != nil {
+				scheduler.AddJob(&task)
+			}
 		case "disable":
-			task.Status = model.TaskStatusDisabled
-			database.DB.Save(&task)
-			scheduler.RemoveJob(id)
+			disableTaskAndRemoveSchedule(&task)
 		case "delete":
-			scheduler.RemoveJob(id)
+			if scheduler != nil {
+				scheduler.RemoveJob(id)
+			}
 			database.DB.Where("task_id = ?", id).Delete(&model.TaskLog{})
 			database.DB.Delete(&task)
 		case "run":
@@ -79,7 +81,9 @@ func (h *TaskHandler) BatchEnable(c *gin.Context) {
 		}
 		task.Status = model.TaskStatusEnabled
 		database.DB.Save(&task)
-		scheduler.AddJob(&task)
+		if scheduler != nil {
+			scheduler.AddJob(&task)
+		}
 		count++
 	}
 	response.Success(c, gin.H{"message": fmt.Sprintf("已启用 %d 个任务", count), "success_count": count})
@@ -94,16 +98,13 @@ func (h *TaskHandler) BatchDisable(c *gin.Context) {
 		return
 	}
 
-	scheduler := service.GetSchedulerV2()
 	count := 0
 	for _, id := range req.TaskIDs {
 		var task model.Task
 		if database.DB.First(&task, id).Error != nil {
 			continue
 		}
-		task.Status = model.TaskStatusDisabled
-		database.DB.Save(&task)
-		scheduler.RemoveJob(id)
+		disableTaskAndRemoveSchedule(&task)
 		count++
 	}
 	response.Success(c, gin.H{"message": fmt.Sprintf("已禁用 %d 个任务", count), "success_count": count})
@@ -121,7 +122,9 @@ func (h *TaskHandler) BatchDelete(c *gin.Context) {
 	scheduler := service.GetSchedulerV2()
 	count := 0
 	for _, id := range req.TaskIDs {
-		scheduler.RemoveJob(id)
+		if scheduler != nil {
+			scheduler.RemoveJob(id)
+		}
 		database.DB.Where("task_id = ?", id).Delete(&model.TaskLog{})
 		database.DB.Where("id = ?", id).Delete(&model.Task{})
 		count++
@@ -151,7 +154,7 @@ func (h *TaskHandler) BatchRun(c *gin.Context) {
 			continue
 		}
 		if task.Status != model.TaskStatusRunning {
-			if err := scheduler.RunNow(id); err == nil {
+			if scheduler != nil && scheduler.RunNow(id) == nil {
 				count++
 			}
 		}

@@ -61,6 +61,13 @@ func PullSubscriptionWithCallback(sub *model.Subscription, onOutput PullCallback
 		output, pullErr = pullGitRepoWithCallback(sub, sshKeyPath, emit)
 	}
 
+	if pullErr == nil {
+		pullErr = runSubscriptionHookIfConfigured(sub, emit)
+	}
+	if pullErr == nil {
+		syncSubscriptionTasks(sub, emit)
+	}
+
 	duration := time.Since(startTime).Seconds()
 
 	status := 0
@@ -70,10 +77,6 @@ func PullSubscriptionWithCallback(sub *model.Subscription, onOutput PullCallback
 	}
 
 	emit(fmt.Sprintf("[完成] 耗时 %.2f 秒, 状态: %s", duration, map[int]string{0: "成功", 1: "失败"}[status]))
-
-	if status == 0 {
-		syncSubscriptionTasks(sub, emit)
-	}
 
 	subLog := model.SubLog{
 		SubscriptionID: sub.ID,
@@ -135,14 +138,49 @@ func pullGitRepoWithCallback(sub *model.Subscription, sshKeyPath string, emit Pu
 	}
 
 	if IsGitRepo(destDir) {
-		emit("[git reset --hard]")
-		GitReset(destDir)
+		var fullOutput strings.Builder
 
-		emit("[git pull]")
-		cmd := exec.Command("git", "pull")
+		emit("[git remote set-url origin]")
+		cmd := exec.Command("git", "remote", "set-url", "origin", sub.URL)
 		cmd.Dir = destDir
 		cmd.Env = env
-		return runCmdWithCallback(cmd, emit)
+		output, err := runCmdWithCallback(cmd, emit)
+		fullOutput.WriteString(output)
+		if err != nil {
+			return fullOutput.String(), err
+		}
+
+		fetchArgs := []string{"fetch", "--depth", "1", "--prune", "origin"}
+		if strings.TrimSpace(sub.Branch) != "" {
+			fetchArgs = append(fetchArgs, strings.TrimSpace(sub.Branch))
+		}
+		emit("[git fetch]")
+		cmd = exec.Command("git", fetchArgs...)
+		cmd.Dir = destDir
+		cmd.Env = env
+		output, err = runCmdWithCallback(cmd, emit)
+		fullOutput.WriteString(output)
+		if err != nil {
+			return fullOutput.String(), err
+		}
+
+		emit("[git reset --hard FETCH_HEAD]")
+		cmd = exec.Command("git", "reset", "--hard", "FETCH_HEAD")
+		cmd.Dir = destDir
+		cmd.Env = env
+		output, err = runCmdWithCallback(cmd, emit)
+		fullOutput.WriteString(output)
+		if err != nil {
+			return fullOutput.String(), err
+		}
+
+		emit("[git clean -fd]")
+		cmd = exec.Command("git", "clean", "-fd")
+		cmd.Dir = destDir
+		cmd.Env = env
+		output, err = runCmdWithCallback(cmd, emit)
+		fullOutput.WriteString(output)
+		return fullOutput.String(), err
 	}
 
 	emit(fmt.Sprintf("[git clone] %s -> %s", sub.URL, saveDir))

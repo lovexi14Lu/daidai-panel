@@ -33,6 +33,9 @@ export interface PanelUpdateStatus {
   updated_at?: string
   container_name?: string
   image_name?: string
+  pull_image_name?: string
+  mirror_host?: string
+  registry_url?: string
 }
 
 export const systemApi = {

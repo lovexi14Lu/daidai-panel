@@ -27,6 +27,7 @@ export function useSettingsConfig() {
     notify_on_resource_warn: false,
     notify_on_login: false,
     proxy_url: '',
+    update_image_mirror: '',
     trusted_proxy_cidrs: '',
     captcha_enabled: false,
     captcha_id: '',
@@ -82,6 +83,7 @@ export function useSettingsConfig() {
         notify_on_resource_warn: readConfigBool(cfgs, 'notify_on_resource_warn', false),
         notify_on_login: readConfigBool(cfgs, 'notify_on_login', false),
         proxy_url: readConfigString(cfgs, 'proxy_url', ''),
+        update_image_mirror: readConfigString(cfgs, 'update_image_mirror', ''),
         trusted_proxy_cidrs: readConfigString(cfgs, 'trusted_proxy_cidrs', ''),
         captcha_enabled: readConfigBool(cfgs, 'captcha_enabled', false),
         captcha_id: readConfigString(cfgs, 'captcha_id', ''),
@@ -168,7 +170,7 @@ export function useSettingsConfig() {
   }
 
   function handleSaveProxy() {
-    void saveConfigKeys(['proxy_url', 'trusted_proxy_cidrs'])
+    void saveConfigKeys(['proxy_url', 'update_image_mirror', 'trusted_proxy_cidrs'])
   }
 
   function handleSaveCaptcha() {

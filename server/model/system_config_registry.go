@@ -56,6 +56,7 @@ var registeredSystemConfigSpecs = []systemConfigSpec{
 	newBoolConfig("notify_on_resource_warn", "false", "资源超限发送通知", "alerts"),
 	newBoolConfig("notify_on_login", "false", "登录成功发送通知", "security"),
 	newValidatedStringConfig("proxy_url", "", "出站请求代理地址", "network", normalizeProxyURL),
+	newValidatedStringConfig("update_image_mirror", "", "系统更新拉取镜像时使用的可选镜像源（留空直连 Docker Hub）", "network", normalizeUpdateImageMirror),
 	newValidatedStringConfig(
 		"trusted_proxy_cidrs",
 		strings.Join(netutil.DefaultTrustedProxyCIDRs(), "\n"),
@@ -238,6 +239,37 @@ func normalizeProxyURL(value string) (string, error) {
 	default:
 		return "", fmt.Errorf("代理地址仅支持 http/https/socks5/socks5h")
 	}
+}
+
+func normalizeUpdateImageMirror(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", nil
+	}
+
+	if !strings.Contains(value, "://") {
+		value = "https://" + value
+	}
+
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Host == "" {
+		return "", fmt.Errorf("系统更新镜像源格式无效")
+	}
+
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https":
+	default:
+		return "", fmt.Errorf("系统更新镜像源仅支持 http/https")
+	}
+
+	if path := strings.Trim(parsed.Path, "/"); path != "" {
+		return "", fmt.Errorf("系统更新镜像源暂不支持附带路径，请只填写主机名")
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", fmt.Errorf("系统更新镜像源不能带查询参数或片段")
+	}
+
+	return parsed.Host, nil
 }
 
 func normalizeTrustedProxyCIDRs(value string) (string, error) {

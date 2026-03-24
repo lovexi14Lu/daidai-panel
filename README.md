@@ -139,7 +139,7 @@ flowchart LR
 ```yaml
 services:
   daidai-panel:
-    image: linzixuanzz/daidai-panel:latest
+    image: docker.1ms.run/linzixuanzz/daidai-panel:latest
     container_name: daidai-panel
     restart: unless-stopped
     ports:
@@ -150,7 +150,7 @@ services:
     environment:
       - TZ=Asia/Shanghai
       - CONTAINER_NAME=daidai-panel
-      - IMAGE_NAME=linzixuanzz/daidai-panel:latest
+      - IMAGE_NAME=docker.1ms.run/linzixuanzz/daidai-panel:latest
 ```
 
 ```bash
@@ -158,6 +158,8 @@ docker compose up -d
 ```
 
 启动后访问：`http://localhost:5700`
+
+> **说明**：上面的 `docker.1ms.run/` 是 Docker Hub 镜像加速前缀，实际对应的镜像仓库仍是 `linzixuanzz/daidai-panel`。
 
 如果你希望通过 `8080` 访问，只需要把上面的端口映射改成：
 
@@ -189,7 +191,7 @@ docker compose -f docker-compose.debian.yml up -d
 如果你是基于当前源码本地试跑，也可以手动构建：
 
 ```bash
-docker build --build-arg VERSION=1.9.4 -f Dockerfile.debian -t daidai-panel:debian-local .
+docker build --build-arg VERSION=1.9.5 -f Dockerfile.debian -t daidai-panel:debian-local .
 ```
 
 从 `v1.9.0` 开始，仓库里的发布工作流会自动发布 Debian 运行时镜像。Debian 运行时只保留一个滚动标签：
@@ -199,7 +201,7 @@ docker build --build-arg VERSION=1.9.4 -f Dockerfile.debian -t daidai-panel:debi
 发布完成后，可以按下面方式直接拉取：
 
 ```bash
-docker pull linzixuanzz/daidai-panel:debian
+docker pull docker.1ms.run/linzixuanzz/daidai-panel:debian
 ```
 
 > **说明**：默认 `docker-compose.yml` 和 Docker Hub `latest` / `<版本号>` 仍是 Alpine 运行时；只有使用 `Dockerfile.debian`、`docker-compose.debian.yml`，或者 Docker Hub 上的 `debian` tag 时，容器内 Linux 依赖安装才会切换到 Debian / `apt` 链路。
@@ -216,8 +218,8 @@ docker run -d \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -e TZ=Asia/Shanghai \
   -e CONTAINER_NAME=daidai-panel \
-  -e IMAGE_NAME=linzixuanzz/daidai-panel:latest \
-  linzixuanzz/daidai-panel:latest
+  -e IMAGE_NAME=docker.1ms.run/linzixuanzz/daidai-panel:latest \
+  docker.1ms.run/linzixuanzz/daidai-panel:latest
 ```
 
 启动后访问：`http://localhost:5700`
@@ -227,72 +229,6 @@ docker run -d \
 > **说明**：挂载 `/var/run/docker.sock` 是为了支持面板内一键更新功能。如果不需要此功能，可以移除该挂载。
 
 > **说明**：`-p 5700:5700` 的左侧是宿主机端口，右侧是容器内 Nginx 端口，不是 Go 后端端口。
-
-### 本地开发运行
-
-#### 环境要求
-
-- Go 1.25+
-- Node.js 20.19+（20.x LTS）或 22.12+
-- npm 或 pnpm
-
-#### 启动后端
-
-```bash
-cd server
-go run .
-```
-
-后端默认监听 `5701` 端口，读取同目录下的 `config.yaml` 作为配置文件。
-
-#### 启动前端
-
-```bash
-cd web
-npm install
-npm run dev
-```
-
-前端 Vite 开发服务器默认运行在 `5173` 端口，已配置将 `/api` 请求代理到 `http://localhost:5701`。
-
-启动后访问：`http://localhost:5173`
-
-#### 本地端口修改
-
-**修改后端端口**：编辑 `server/config.yaml`
-
-```yaml
-server:
-  port: 5701    # 改为你想要的端口
-```
-
-修改后端端口后，需要同步修改前端代理地址。编辑 `web/vite.config.ts`：
-
-```typescript
-server: {
-  port: 5173,   // 前端端口，按需修改
-  proxy: {
-    '/api': {
-      target: 'http://localhost:5701',  // 改为对应的后端端口
-      changeOrigin: true
-    }
-  }
-}
-```
-
-#### 构建生产版本
-
-```bash
-# 构建前端
-cd web
-npm run build
-
-# 构建后端
-cd server
-go build -o daidai-panel .
-```
-
-前端构建产物在 `web/dist/`，需配合 Nginx 或其他静态服务器部署，并反向代理 `/api` 到后端。
 
 ### 自定义端口（Docker）
 
@@ -310,7 +246,7 @@ docker run -d \
   -v $(pwd)/Dumb-Panel:/app/Dumb-Panel \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -e TZ=Asia/Shanghai \
-  linzixuanzz/daidai-panel:latest
+  docker.1ms.run/linzixuanzz/daidai-panel:latest
 ```
 
 此时端口关系是：
@@ -335,7 +271,7 @@ docker run -d \
   -v $(pwd)/Dumb-Panel:/app/Dumb-Panel \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -e TZ=Asia/Shanghai \
-  linzixuanzz/daidai-panel:latest
+  docker.1ms.run/linzixuanzz/daidai-panel:latest
 ```
 
 此时端口关系是：
@@ -353,18 +289,18 @@ docker run -d \
 
 ## 自动发布
 
-仓库已配置 GitHub Actions 发布工作流。推送形如 `v1.9.4` 的 tag 后，会自动完成：
+仓库已配置 GitHub Actions 发布工作流。推送形如 `v1.9.5` 的 tag 后，会自动完成：
 
 - 创建 GitHub Release
 - 推送 Alpine 运行时镜像：`linzixuanzz/daidai-panel:latest`
-- 推送 Alpine 版本镜像：`linzixuanzz/daidai-panel:1.9.4`
+- 推送 Alpine 版本镜像：`linzixuanzz/daidai-panel:1.9.5`
 - 推送 Debian 运行时镜像：`linzixuanzz/daidai-panel:debian`
 
 本次版本发布命令示例：
 
 ```bash
-git tag v1.9.4
-git push origin v1.9.4
+git tag v1.9.5
+git push origin v1.9.5
 ```
 
 ## 更新方法
@@ -376,20 +312,20 @@ git push origin v1.9.4
 ### 方式二：手动更新
 
 ```bash
-docker pull linzixuanzz/daidai-panel:latest
+docker pull docker.1ms.run/linzixuanzz/daidai-panel:latest
 docker compose up -d
 ```
 
 如果你当前使用的是源码仓库里手动本地构建的 Debian 运行时镜像，更新方式是重新构建：
 
 ```bash
-docker build --build-arg VERSION=1.9.4 -f Dockerfile.debian -t daidai-panel:debian-local .
+docker build --build-arg VERSION=1.9.5 -f Dockerfile.debian -t daidai-panel:debian-local .
 ```
 
 如果你使用的是 Debian 运行时镜像，则按下面方式更新：
 
 ```bash
-docker pull linzixuanzz/daidai-panel:debian
+docker pull docker.1ms.run/linzixuanzz/daidai-panel:debian
 docker compose -f docker-compose.debian.yml up -d
 ```
 
@@ -430,7 +366,7 @@ docker compose -f docker-compose.debian.yml up -d
 <details>
 <summary><b>config.yaml 完整配置说明</b></summary>
 
-本地开发时后端读取 `server/config.yaml`，Docker 部署时由 `entrypoint.sh` 自动生成。
+`config.yaml` 用于后端启动配置；Docker 部署时由 `entrypoint.sh` 自动生成。
 
 ```yaml
 server:

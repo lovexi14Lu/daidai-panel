@@ -416,13 +416,23 @@ async function handleDelete(id: number) {
 
 async function handleToggle(row: any) {
   try {
+    const enabling = !row.enabled
+    await ElMessageBox.confirm(
+      enabling
+        ? `确认启用环境变量 ${row.name} 吗？`
+        : `确认禁用环境变量 ${row.name} 吗？禁用后脚本将无法读取该变量。`,
+      enabling ? '启用确认' : '禁用确认',
+      { type: enabling ? 'info' : 'warning' }
+    )
     if (row.enabled) {
       await envApi.disable(row.id)
     } else {
       await envApi.enable(row.id)
     }
+    ElMessage.success(row.enabled ? '已禁用' : '已启用')
     void loadData()
-  } catch {
+  } catch (err: any) {
+    if (err === 'cancel' || err?.toString?.() === 'cancel') return
     ElMessage.error('操作失败')
   }
 }
@@ -461,10 +471,12 @@ async function confirmBatchGroup(group: string) {
 async function handleBatchEnable() {
   if (selectedIds.value.length === 0) return
   try {
+    await ElMessageBox.confirm(`确认启用选中的 ${selectedIds.value.length} 个环境变量吗？`, '批量启用', { type: 'info' })
     await envApi.batchEnable(selectedIds.value)
     ElMessage.success('批量启用成功')
     void loadData()
-  } catch {
+  } catch (err: any) {
+    if (err === 'cancel' || err?.toString?.() === 'cancel') return
     ElMessage.error('批量启用失败')
   }
 }
@@ -472,10 +484,12 @@ async function handleBatchEnable() {
 async function handleBatchDisable() {
   if (selectedIds.value.length === 0) return
   try {
+    await ElMessageBox.confirm(`确认禁用选中的 ${selectedIds.value.length} 个环境变量吗？`, '批量禁用', { type: 'warning' })
     await envApi.batchDisable(selectedIds.value)
     ElMessage.success('批量禁用成功')
     void loadData()
-  } catch {
+  } catch (err: any) {
+    if (err === 'cancel' || err?.toString?.() === 'cancel') return
     ElMessage.error('批量禁用失败')
   }
 }

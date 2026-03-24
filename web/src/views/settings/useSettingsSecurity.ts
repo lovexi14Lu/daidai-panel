@@ -485,11 +485,13 @@ export function useSettingsSecurity() {
 
   async function handleRevokeSession(id: number) {
     try {
+      await ElMessageBox.confirm('确定要撤销该会话吗？被撤销的设备将需要重新登录。', '确认', { type: 'warning' })
       await securityApi.revokeSession(id)
       ElMessage.success('会话已撤销，即将重新登录')
       authStore.clearAuth()
       setTimeout(() => void router.push('/login'), 500)
-    } catch {
+    } catch (err: any) {
+      if (err === 'cancel' || err?.toString?.() === 'cancel') return
       ElMessage.error('操作失败')
     }
   }

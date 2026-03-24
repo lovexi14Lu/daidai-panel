@@ -27,6 +27,27 @@ defineProps<{
     </div>
 
     <div class="form-field">
+      <label>系统更新镜像源</label>
+      <div class="mirror-row">
+        <el-input v-model="form.update_image_mirror" placeholder="docker.1ms.run" />
+        <el-button text type="primary" @click="form.update_image_mirror = 'docker.1ms.run'">
+          使用推荐镜像
+        </el-button>
+        <el-button
+          v-if="form.update_image_mirror"
+          text
+          type="danger"
+          @click="form.update_image_mirror = ''"
+        >
+          恢复直连
+        </el-button>
+      </div>
+      <span class="form-hint">
+        可填写 docker.1ms.run 或 https://docker.1ms.run/。留空则直接从默认镜像仓库拉取更新镜像。
+      </span>
+    </div>
+
+    <div class="form-field">
       <label>可信代理 CIDR</label>
       <el-input
         v-model="form.trusted_proxy_cidrs"
@@ -43,4 +64,17 @@ defineProps<{
 
 <style scoped lang="scss">
 @use './config-card-shared.scss' as *;
+
+.mirror-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 768px) {
+  .mirror-row {
+    align-items: stretch;
+  }
+}
 </style>

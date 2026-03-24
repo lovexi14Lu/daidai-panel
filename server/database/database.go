@@ -143,6 +143,7 @@ func EnsureColumns() {
 		{"whitelist", "VARCHAR(512) DEFAULT ''"},
 		{"blacklist", "VARCHAR(512) DEFAULT ''"},
 		{"depend_on", "VARCHAR(512) DEFAULT ''"},
+		{"hook_script", "TEXT DEFAULT ''"},
 	})
 
 	ensureTableColumns("open_apps", []columnDef{

@@ -104,16 +104,12 @@ func (h *TaskHandler) List(c *gin.Context) {
 
 func taskSortGroup(status float64) int {
 	switch status {
-	case model.TaskStatusRunning:
+	case model.TaskStatusEnabled, model.TaskStatusQueued, model.TaskStatusRunning:
 		return 0
-	case model.TaskStatusEnabled:
-		return 1
-	case model.TaskStatusQueued:
-		return 2
 	case model.TaskStatusDisabled:
-		return 3
+		return 1
 	default:
-		return 4
+		return 2
 	}
 }
 

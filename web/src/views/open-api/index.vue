@@ -363,13 +363,22 @@ const viewSecret = async (app: any) => {
 
 const toggleEnabled = async (app: any, val: boolean) => {
   try {
+    await ElMessageBox.confirm(
+      val
+        ? `确认启用应用「${app.name}」吗？`
+        : `确认禁用应用「${app.name}」吗？禁用后该 App Key / App Secret 将立即失效。`,
+      val ? '启用确认' : '禁用确认',
+      { type: val ? 'info' : 'warning' }
+    )
     if (val) {
       await openApiApi.enable(app.id)
     } else {
       await openApiApi.disable(app.id)
     }
     app.enabled = val
-  } catch {
+    ElMessage.success(val ? '已启用' : '已禁用')
+  } catch (err: any) {
+    if (err === 'cancel' || err?.toString?.() === 'cancel') return
     ElMessage.error('操作失败')
   }
 }

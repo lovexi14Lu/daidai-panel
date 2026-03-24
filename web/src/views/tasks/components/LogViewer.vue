@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch, onUnmounted } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { taskApi } from '@/api/task'
 import { openAuthorizedEventStream, type EventStreamConnection } from '@/utils/sse'
 import { useResponsive } from '@/composables/useResponsive'
@@ -24,7 +24,9 @@ const autoScroll = ref(true)
 const { dialogFullscreen } = useResponsive()
 let eventSource: EventStreamConnection | null = null
 let logBuffer: string[] = []
-let logFlushRaf = 0
+let logFlushTimer: ReturnType<typeof setTimeout> | null = null
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+let hiddenAt: number | null = null
 
 const hasLogs = computed(() => logLines.value.length > 0 || logTail.value.length > 0)
 const renderedLogText = computed(() => {
@@ -37,21 +39,37 @@ const renderedLogText = computed(() => {
 
 watch(() => props.visible, (visible) => {
   if (visible && props.taskId) {
-    startStream()
+    void startStream()
   } else {
     cleanup()
   }
 })
 
+watch(() => props.taskId, (taskId, previousTaskId) => {
+  if (props.visible && taskId && taskId !== previousTaskId) {
+    void startStream()
+  }
+})
+
+watch(autoScroll, (enabled) => {
+  if (enabled) {
+    scheduleScrollToBottom()
+  }
+})
+
 async function startStream() {
+  cleanup()
   resetLogOutput()
   done.value = false
   error.value = null
   loading.value = true
 
-  const url = `/api/v1/logs/${props.taskId}/stream`
+  if (!props.taskId) {
+    loading.value = false
+    return
+  }
 
-  cleanup()
+  const url = `/api/v1/logs/${props.taskId}/stream`
   eventSource = openAuthorizedEventStream(url, {
     onOpen() {
       loading.value = false
@@ -62,45 +80,39 @@ async function startStream() {
         return
       }
       logBuffer.push(data)
-      if (!logFlushRaf) {
-        logFlushRaf = requestAnimationFrame(() => {
-          for (const chunk of logBuffer) {
-            appendLogChunk(chunk, true)
-          }
-          logBuffer = []
-          logFlushRaf = 0
-          if (autoScroll.value) {
-            scrollToBottom()
-          }
-        })
-      }
+      scheduleBufferFlush()
     },
     onEvent(event) {
       if (event.event !== 'done') {
         return
       }
+      flushBufferedLogs()
       done.value = true
       cleanup()
       if (event.data === 'reconnect') {
-        setTimeout(() => startStream(), 500)
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null
+          void startStream()
+        }, 500)
         return
       }
       if (!hasLogs.value) {
-        fetchLatestLog()
+        void fetchLatestLog()
       }
     },
     onError() {
+      flushBufferedLogs()
       loading.value = false
       done.value = true
       cleanup()
       if (!hasLogs.value) {
-        fetchLatestLog()
+        void fetchLatestLog()
       }
     }
   })
 }
 
-async function fetchLatestLog() {
+async function fetchLatestLog(retryCount = 0) {
   try {
     const res = await taskApi.latestLog(props.taskId!) as any
     if (!res) {
@@ -110,11 +122,19 @@ async function fetchLatestLog() {
     if (res.content) {
       resetLogOutput()
       appendLogChunk(String(res.content))
+      scheduleScrollToBottom()
     } else {
       error.value = '日志已过期，文件已被清理'
     }
   } catch (err: any) {
     if (err?.response?.status === 404) {
+      if (retryCount < 3 && props.visible) {
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null
+          void fetchLatestLog(retryCount + 1)
+        }, 350)
+        return
+      }
       error.value = '暂无日志记录'
     } else {
       error.value = '获取日志失败'
@@ -165,6 +185,41 @@ function appendLogChunk(chunk: string, commitBoundary = false) {
   }
 }
 
+function scheduleBufferFlush() {
+  if (logFlushTimer !== null) {
+    return
+  }
+  logFlushTimer = setTimeout(() => {
+    logFlushTimer = null
+    flushBufferedLogs()
+  }, 16)
+}
+
+function flushBufferedLogs() {
+  if (logFlushTimer !== null) {
+    clearTimeout(logFlushTimer)
+    logFlushTimer = null
+  }
+  if (logBuffer.length === 0) {
+    return
+  }
+
+  for (const chunk of logBuffer) {
+    appendLogChunk(chunk, true)
+  }
+  logBuffer = []
+
+  if (autoScroll.value) {
+    scheduleScrollToBottom()
+  }
+}
+
+function scheduleScrollToBottom() {
+  void nextTick(() => {
+    scrollToBottom()
+  })
+}
+
 function scrollToBottom() {
   if (logContainerRef.value) {
     logContainerRef.value.scrollTop = logContainerRef.value.scrollHeight
@@ -172,18 +227,56 @@ function scrollToBottom() {
 }
 
 function cleanup() {
+  if (logFlushTimer !== null) {
+    clearTimeout(logFlushTimer)
+    logFlushTimer = null
+  }
+  logBuffer = []
   if (eventSource) {
     eventSource.close()
     eventSource = null
   }
-  if (logFlushRaf) {
-    cancelAnimationFrame(logFlushRaf)
-    logFlushRaf = 0
+  if (reconnectTimer !== null) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
   }
-  logBuffer = []
 }
 
-onUnmounted(cleanup)
+function handleVisibilityChange() {
+  flushBufferedLogs()
+  if (document.hidden) {
+    hiddenAt = Date.now()
+    return
+  }
+
+  if (!props.visible || !props.taskId) {
+    hiddenAt = null
+    return
+  }
+
+  const wasBackgrounded = hiddenAt !== null && Date.now() - hiddenAt > 1500
+  hiddenAt = null
+
+  if (done.value) {
+    if (!hasLogs.value) {
+      void fetchLatestLog()
+    }
+    return
+  }
+
+  if (wasBackgrounded) {
+    void startStream()
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+  cleanup()
+})
 
 function handleClose() {
   emit('update:visible', false)

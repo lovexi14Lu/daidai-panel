@@ -29,6 +29,7 @@ func Setup(engine *gin.Engine) {
 	depsHandler := handler.NewDepsHandler()
 	configHandler := handler.NewConfigHandler()
 	platformTokenHandler := handler.NewPlatformTokenHandler()
+	sponsorHandler := handler.NewSponsorHandler()
 
 	authHandler.RegisterRoutes(v1)
 	authHandler.RegisterRoutes(legacy)
@@ -74,6 +75,9 @@ func Setup(engine *gin.Engine) {
 
 	platformTokenHandler.RegisterRoutes(v1)
 	platformTokenHandler.RegisterRoutes(legacy)
+
+	sponsorHandler.RegisterRoutes(v1)
+	sponsorHandler.RegisterRoutes(legacy)
 
 	engine.GET("/api/v1/version", func(c *gin.Context) {
 		c.JSON(200, gin.H{

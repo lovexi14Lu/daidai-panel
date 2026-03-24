@@ -59,6 +59,17 @@ func TestConfigListIncludesRegistryMetadata(t *testing.T) {
 	if got, _ := proxyCfg["group"].(string); got != "network" {
 		t.Fatalf("expected proxy_url group network, got %q", got)
 	}
+
+	updateMirrorCfg, ok := data["update_image_mirror"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected update_image_mirror entry, got %T", data["update_image_mirror"])
+	}
+	if got, _ := updateMirrorCfg["registered"].(bool); !got {
+		t.Fatalf("expected update_image_mirror to be marked registered")
+	}
+	if got, _ := updateMirrorCfg["group"].(string); got != "network" {
+		t.Fatalf("expected update_image_mirror group network, got %q", got)
+	}
 }
 
 func TestConfigBatchSetUsesRegistryValidation(t *testing.T) {
@@ -68,7 +79,7 @@ func TestConfigBatchSetUsesRegistryValidation(t *testing.T) {
 	token := testutil.MustCreateAccessToken(t, admin.Username, admin.Role)
 	engine := newProtectedRouter()
 
-	body := `{"configs":{"auto_install_deps":"0","captcha_fail_mode":" strict ","command_timeout":"600"}}`
+	body := `{"configs":{"auto_install_deps":"0","captcha_fail_mode":" strict ","command_timeout":"600","update_image_mirror":"https://docker.1ms.run/"}}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/configs/batch", bytes.NewBufferString(body))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
@@ -86,6 +97,9 @@ func TestConfigBatchSetUsesRegistryValidation(t *testing.T) {
 	}
 	if got := model.GetRegisteredConfigInt("command_timeout"); got != 600 {
 		t.Fatalf("expected command_timeout 600, got %d", got)
+	}
+	if got := model.GetRegisteredConfig("update_image_mirror"); got != "docker.1ms.run" {
+		t.Fatalf("expected update_image_mirror docker.1ms.run, got %q", got)
 	}
 
 	trustedProxyBody := `{"configs":{"trusted_proxy_cidrs":"127.0.0.1,203.0.113.0/24"}}`
@@ -119,5 +133,16 @@ func TestConfigBatchSetUsesRegistryValidation(t *testing.T) {
 	}
 	if got, _ := invalidPayload["error"].(string); got == "" {
 		t.Fatalf("expected validation error message, got %v", invalidPayload)
+	}
+
+	invalidMirrorBody := `{"configs":{"update_image_mirror":"https://docker.1ms.run/path"}}`
+	invalidMirrorReq := httptest.NewRequest(http.MethodPut, "/api/v1/configs/batch", bytes.NewBufferString(invalidMirrorBody))
+	invalidMirrorReq.Header.Set("Authorization", "Bearer "+token)
+	invalidMirrorReq.Header.Set("Content-Type", "application/json")
+	invalidMirrorRec := httptest.NewRecorder()
+	engine.ServeHTTP(invalidMirrorRec, invalidMirrorReq)
+
+	if invalidMirrorRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid update_image_mirror request to return 400, got %d", invalidMirrorRec.Code)
 	}
 }

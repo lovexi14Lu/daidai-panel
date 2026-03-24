@@ -12,12 +12,16 @@ import (
 	"sync"
 	"time"
 
+	"daidai-panel/model"
 	"daidai-panel/pkg/response"
 
 	"github.com/gin-gonic/gin"
 )
 
-const dockerSocketPath = "/var/run/docker.sock"
+const (
+	dockerSocketPath             = "/var/run/docker.sock"
+	defaultDockerHubRegistryHost = "registry-1.docker.io"
+)
 
 type panelUpdateStatusSnapshot struct {
 	Status        string    `json:"status"`
@@ -28,6 +32,9 @@ type panelUpdateStatusSnapshot struct {
 	UpdatedAt     time.Time `json:"updated_at"`
 	ContainerName string    `json:"container_name,omitempty"`
 	ImageName     string    `json:"image_name,omitempty"`
+	PullImageName string    `json:"pull_image_name,omitempty"`
+	MirrorHost    string    `json:"mirror_host,omitempty"`
+	RegistryURL   string    `json:"registry_url,omitempty"`
 }
 
 type panelUpdateManager struct {
@@ -38,6 +45,9 @@ type panelUpdateManager struct {
 type panelUpdatePlan struct {
 	ContainerName string
 	ImageName     string
+	PullImageName string
+	MirrorHost    string
+	RegistryURL   string
 	RunArgs       []string
 }
 
@@ -87,7 +97,7 @@ func newPanelUpdateManager() *panelUpdateManager {
 	}
 }
 
-func (m *panelUpdateManager) begin(containerName, imageName string) error {
+func (m *panelUpdateManager) begin(plan *panelUpdatePlan) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -99,11 +109,14 @@ func (m *panelUpdateManager) begin(containerName, imageName string) error {
 	m.snapshot = panelUpdateStatusSnapshot{
 		Status:        "running",
 		Phase:         "preparing",
-		Message:       "更新环境校验通过，准备拉取最新镜像",
+		Message:       "更新环境校验通过，准备检查镜像仓库并拉取最新镜像",
 		StartedAt:     now,
 		UpdatedAt:     now,
-		ContainerName: containerName,
-		ImageName:     imageName,
+		ContainerName: plan.ContainerName,
+		ImageName:     plan.ImageName,
+		PullImageName: plan.PullImageName,
+		MirrorHost:    plan.MirrorHost,
+		RegistryURL:   plan.RegistryURL,
 	}
 	return nil
 }
@@ -193,9 +206,17 @@ func buildPanelUpdatePlan() (*panelUpdatePlan, error) {
 		return nil, fmt.Errorf("无法识别当前容器镜像，请设置环境变量 IMAGE_NAME")
 	}
 
+	pullImageName, mirrorHost, registryURL := resolveUpdateImageTarget(
+		imageName,
+		model.GetRegisteredConfig("update_image_mirror"),
+	)
+
 	return &panelUpdatePlan{
 		ContainerName: containerName,
 		ImageName:     imageName,
+		PullImageName: pullImageName,
+		MirrorHost:    mirrorHost,
+		RegistryURL:   registryURL,
 		RunArgs:       buildContainerRunArgs(containerName, imageName, info),
 	}, nil
 }
@@ -383,14 +404,32 @@ func filterContainerEnv(envList []string) []string {
 }
 
 func executePanelUpdate(plan *panelUpdatePlan) {
-	panelUpdater.setRunning("pulling", fmt.Sprintf("正在拉取最新镜像 %s", plan.ImageName))
+	panelUpdater.setRunning("preparing", fmt.Sprintf("正在检查镜像仓库连通性 %s", plan.RegistryURL))
+	if err := preflightUpdateRegistry(plan); err != nil {
+		panelUpdater.fail(err)
+		return
+	}
+
+	panelUpdater.setRunning("pulling", fmt.Sprintf("正在拉取最新镜像 %s", plan.PullImageName))
 
 	pullCtx, pullCancel := context.WithTimeout(context.Background(), 20*time.Minute)
-	pullOutput, err := dockerCommandOutput(pullCtx, "pull", plan.ImageName)
+	pullOutput, err := dockerCommandOutput(pullCtx, "pull", plan.PullImageName)
 	pullCancel()
 	if err != nil {
-		panelUpdater.fail(formatDockerCommandError("拉取最新镜像失败", err, pullOutput))
+		panelUpdater.fail(formatPanelUpdatePullError(plan, err, pullOutput))
 		return
+	}
+
+	if plan.PullImageName != "" && plan.PullImageName != plan.ImageName {
+		panelUpdater.setRunning("pulling", fmt.Sprintf("镜像已拉取完成，正在同步更新标签 %s", plan.ImageName))
+
+		tagCtx, tagCancel := context.WithTimeout(context.Background(), time.Minute)
+		tagOutput, tagErr := dockerCommandOutput(tagCtx, "tag", plan.PullImageName, plan.ImageName)
+		tagCancel()
+		if tagErr != nil {
+			panelUpdater.fail(formatDockerCommandError("同步更新镜像标签失败", tagErr, tagOutput))
+			return
+		}
 	}
 
 	panelUpdater.setRunning("scheduling", "镜像已拉取完成，正在启动更新辅助容器")
@@ -433,6 +472,40 @@ func dockerCommandOutput(ctx context.Context, args ...string) ([]byte, error) {
 	return cmd.CombinedOutput()
 }
 
+func preflightUpdateRegistry(plan *panelUpdatePlan) error {
+	registryURL := strings.TrimSpace(plan.RegistryURL)
+	if registryURL == "" {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	client := &http.Client{
+		Timeout:   12 * time.Second,
+		Transport: transport,
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, registryURL, nil)
+	if err != nil {
+		return fmt.Errorf("更新前镜像仓库连通性检查失败：%w", err)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("更新前镜像仓库连通性检查失败：%w。%s", err, buildPanelUpdateNetworkHint(plan))
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= http.StatusInternalServerError {
+		return fmt.Errorf("更新前镜像仓库连通性检查失败：镜像仓库返回状态 %d。%s", resp.StatusCode, buildPanelUpdateNetworkHint(plan))
+	}
+
+	return nil
+}
+
 func formatDockerCommandError(prefix string, err error, output []byte) error {
 	detail := trimCommandOutput(output)
 	switch {
@@ -443,6 +516,15 @@ func formatDockerCommandError(prefix string, err error, output []byte) error {
 	default:
 		return fmt.Errorf("%s", prefix)
 	}
+}
+
+func formatPanelUpdatePullError(plan *panelUpdatePlan, err error, output []byte) error {
+	base := formatDockerCommandError("拉取最新镜像失败", err, output)
+	hint := buildPanelUpdatePullHint(plan, err, output)
+	if hint == "" {
+		return base
+	}
+	return fmt.Errorf("%s。%s", strings.TrimSpace(base.Error()), hint)
 }
 
 func trimCommandOutput(output []byte) string {
@@ -456,6 +538,31 @@ func trimCommandOutput(output []byte) string {
 		lines = lines[len(lines)-6:]
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func buildPanelUpdatePullHint(plan *panelUpdatePlan, err error, output []byte) string {
+	lower := strings.ToLower(strings.TrimSpace(string(output)))
+	if err != nil {
+		lower += "\n" + strings.ToLower(err.Error())
+	}
+
+	if strings.Contains(lower, "context deadline exceeded") ||
+		strings.Contains(lower, "client.timeout exceeded while awaiting headers") ||
+		strings.Contains(lower, "i/o timeout") ||
+		strings.Contains(lower, "tls handshake timeout") ||
+		strings.Contains(lower, "no such host") ||
+		strings.Contains(lower, "temporary failure in name resolution") {
+		return fmt.Sprintf("这通常是宿主机到镜像仓库的网络或 DNS 异常。目标仓库：%s。%s", plan.RegistryURL, buildPanelUpdateNetworkHint(plan))
+	}
+
+	return ""
+}
+
+func buildPanelUpdateNetworkHint(plan *panelUpdatePlan) string {
+	if strings.TrimSpace(plan.MirrorHost) != "" {
+		return fmt.Sprintf("当前系统更新镜像源为 %s，请检查该镜像源是否可访问；如需恢复直连，可在“系统设置 / 网络代理”中清空系统更新镜像源。", plan.MirrorHost)
+	}
+	return "当前将直连 Docker Hub；如宿主机访问 Docker Hub 较慢，可在“系统设置 / 网络代理”中填写系统更新镜像源，例如 docker.1ms.run。"
 }
 
 func uniqueNonEmptyStrings(values ...string) []string {
@@ -473,6 +580,53 @@ func uniqueNonEmptyStrings(values ...string) []string {
 		result = append(result, value)
 	}
 	return result
+}
+
+func resolveUpdateImageTarget(imageName, mirrorHost string) (pullImageName, resolvedMirrorHost, registryURL string) {
+	imageName = strings.TrimSpace(imageName)
+	mirrorHost = strings.TrimSpace(mirrorHost)
+	registryHost, repoRef := splitImageRegistry(imageName)
+
+	if mirrorHost != "" && (registryHost == defaultDockerHubRegistryHost || registryHost == mirrorHost) {
+		if registryHost == mirrorHost {
+			return imageName, mirrorHost, buildRegistryEndpoint(mirrorHost)
+		}
+		return mirrorHost + "/" + repoRef, mirrorHost, buildRegistryEndpoint(mirrorHost)
+	}
+
+	return imageName, "", buildRegistryEndpoint(registryHost)
+}
+
+func splitImageRegistry(imageName string) (registryHost, repoRef string) {
+	imageName = strings.TrimSpace(imageName)
+	if imageName == "" {
+		return defaultDockerHubRegistryHost, ""
+	}
+
+	parts := strings.Split(imageName, "/")
+	if len(parts) <= 1 || !isExplicitRegistryHost(parts[0]) {
+		return defaultDockerHubRegistryHost, imageName
+	}
+
+	registryHost = strings.ToLower(strings.TrimSpace(parts[0]))
+	switch registryHost {
+	case "docker.io", "index.docker.io":
+		registryHost = defaultDockerHubRegistryHost
+	}
+	return registryHost, strings.Join(parts[1:], "/")
+}
+
+func isExplicitRegistryHost(segment string) bool {
+	segment = strings.ToLower(strings.TrimSpace(segment))
+	return strings.Contains(segment, ".") || strings.Contains(segment, ":") || segment == "localhost"
+}
+
+func buildRegistryEndpoint(host string) string {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		host = defaultDockerHubRegistryHost
+	}
+	return "https://" + host + "/v2/"
 }
 
 func mustHostname() string {

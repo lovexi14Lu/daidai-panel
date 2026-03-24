@@ -480,6 +480,20 @@ func sendWecomAppWithContext(cfg map[string]string, title, content string, conte
 		body["news"] = map[string]interface{}{
 			"articles": articleList,
 		}
+	case "mpnews":
+		body["safe"] = notificationConfigInt(cfg["safe"], 0)
+		body["enable_id_trans"] = notificationConfigInt(cfg["enable_id_trans"], 0)
+		articles, err := parseNotificationJSONTemplateWithContext(cfg["mpnews_articles"], title, content, context)
+		if err != nil {
+			return fmt.Errorf("企业微信应用 mpnews 配置无效: %w", err)
+		}
+		articleList, ok := articles.([]interface{})
+		if !ok || len(articleList) == 0 {
+			return fmt.Errorf("企业微信应用 mpnews 需要至少一条 articles")
+		}
+		body["mpnews"] = map[string]interface{}{
+			"articles": articleList,
+		}
 	case "template_card":
 		body["enable_id_trans"] = notificationConfigInt(cfg["enable_id_trans"], 0)
 		cardPayload, err := parseNotificationJSONTemplateWithContext(cfg["template_card_payload"], title, content, context)

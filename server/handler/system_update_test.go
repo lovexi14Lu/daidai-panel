@@ -1,0 +1,74 @@
+package handler
+
+import (
+	"errors"
+	"strings"
+	"testing"
+)
+
+func TestResolveUpdateImageTargetUsesMirrorForDockerHubImage(t *testing.T) {
+	pullImage, mirrorHost, registryURL := resolveUpdateImageTarget("linzixuanzz/daidai-panel:latest", "docker.1ms.run")
+
+	if pullImage != "docker.1ms.run/linzixuanzz/daidai-panel:latest" {
+		t.Fatalf("expected mirrored pull image, got %q", pullImage)
+	}
+	if mirrorHost != "docker.1ms.run" {
+		t.Fatalf("expected mirror host docker.1ms.run, got %q", mirrorHost)
+	}
+	if registryURL != "https://docker.1ms.run/v2/" {
+		t.Fatalf("expected mirror registry url, got %q", registryURL)
+	}
+}
+
+func TestResolveUpdateImageTargetStripsExplicitDockerHubHost(t *testing.T) {
+	pullImage, mirrorHost, registryURL := resolveUpdateImageTarget("docker.io/linzixuanzz/daidai-panel:latest", "docker.1ms.run")
+
+	if pullImage != "docker.1ms.run/linzixuanzz/daidai-panel:latest" {
+		t.Fatalf("expected mirrored pull image without explicit docker.io prefix, got %q", pullImage)
+	}
+	if mirrorHost != "docker.1ms.run" {
+		t.Fatalf("expected mirror host docker.1ms.run, got %q", mirrorHost)
+	}
+	if registryURL != "https://docker.1ms.run/v2/" {
+		t.Fatalf("expected mirror registry url, got %q", registryURL)
+	}
+}
+
+func TestResolveUpdateImageTargetKeepsCustomRegistryDirect(t *testing.T) {
+	pullImage, mirrorHost, registryURL := resolveUpdateImageTarget("ghcr.io/acme/panel:latest", "docker.1ms.run")
+
+	if pullImage != "ghcr.io/acme/panel:latest" {
+		t.Fatalf("expected custom registry image to remain unchanged, got %q", pullImage)
+	}
+	if mirrorHost != "" {
+		t.Fatalf("expected mirror host to be ignored for custom registry, got %q", mirrorHost)
+	}
+	if registryURL != "https://ghcr.io/v2/" {
+		t.Fatalf("expected ghcr registry url, got %q", registryURL)
+	}
+}
+
+func TestFormatPanelUpdatePullErrorAddsNetworkHint(t *testing.T) {
+	plan := &panelUpdatePlan{
+		ImageName:     "linzixuanzz/daidai-panel:latest",
+		PullImageName: "docker.1ms.run/linzixuanzz/daidai-panel:latest",
+		MirrorHost:    "docker.1ms.run",
+		RegistryURL:   "https://docker.1ms.run/v2/",
+	}
+
+	err := formatPanelUpdatePullError(
+		plan,
+		errContextDeadlineExceeded,
+		[]byte(`Get "https://docker.1ms.run/v2/": context deadline exceeded (Client.Timeout exceeded while awaiting headers)`),
+	)
+
+	msg := err.Error()
+	if !strings.Contains(msg, "宿主机到镜像仓库的网络或 DNS 异常") {
+		t.Fatalf("expected network hint in error message, got %q", msg)
+	}
+	if !strings.Contains(msg, "docker.1ms.run") {
+		t.Fatalf("expected mirror host in error message, got %q", msg)
+	}
+}
+
+var errContextDeadlineExceeded = errors.New("context deadline exceeded")

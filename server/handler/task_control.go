@@ -14,6 +14,24 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func disableTaskAndRemoveSchedule(task *model.Task) string {
+	if task == nil {
+		return "已禁用"
+	}
+
+	if scheduler := service.GetSchedulerV2(); scheduler != nil {
+		scheduler.RemoveJob(task.ID)
+	}
+
+	if task.Status == model.TaskStatusRunning {
+		return "已设置为禁用，当前执行结束后生效"
+	}
+
+	task.Status = model.TaskStatusDisabled
+	database.DB.Save(task)
+	return "已禁用"
+}
+
 func (h *TaskHandler) Run(c *gin.Context) {
 	taskID, _ := strconv.ParseUint(c.Param("id"), 10, 32)
 
@@ -94,7 +112,9 @@ func (h *TaskHandler) Enable(c *gin.Context) {
 
 	task.Status = model.TaskStatusEnabled
 	database.DB.Save(&task)
-	service.GetSchedulerV2().AddJob(&task)
+	if scheduler := service.GetSchedulerV2(); scheduler != nil {
+		scheduler.AddJob(&task)
+	}
 	response.Success(c, gin.H{"message": "已启用", "data": task.ToDict()})
 }
 
@@ -107,8 +127,6 @@ func (h *TaskHandler) Disable(c *gin.Context) {
 		return
 	}
 
-	task.Status = model.TaskStatusDisabled
-	database.DB.Save(&task)
-	service.GetSchedulerV2().RemoveJob(uint(taskID))
-	response.Success(c, gin.H{"message": "已禁用", "data": task.ToDict()})
+	message := disableTaskAndRemoveSchedule(&task)
+	response.Success(c, gin.H{"message": message, "data": task.ToDict()})
 }

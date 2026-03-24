@@ -323,8 +323,11 @@ func (h *SystemHandler) CheckUpdate(c *gin.Context) {
 		updateDisabledReason = planErr.Error()
 	} else {
 		updateTarget = gin.H{
-			"container_name": plan.ContainerName,
-			"image_name":     plan.ImageName,
+			"container_name":  plan.ContainerName,
+			"image_name":      plan.ImageName,
+			"pull_image_name": plan.PullImageName,
+			"mirror_host":     plan.MirrorHost,
+			"registry_url":    plan.RegistryURL,
 		}
 	}
 
@@ -350,7 +353,7 @@ func (h *SystemHandler) UpdatePanel(c *gin.Context) {
 		return
 	}
 
-	if err := panelUpdater.begin(plan.ContainerName, plan.ImageName); err != nil {
+	if err := panelUpdater.begin(plan); err != nil {
 		respondUpdateConflict(c, err.Error())
 		return
 	}

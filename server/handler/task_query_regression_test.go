@@ -8,6 +8,7 @@ import (
 
 	"daidai-panel/database"
 	"daidai-panel/model"
+	"daidai-panel/service"
 	"daidai-panel/testutil"
 )
 
@@ -76,6 +77,75 @@ func TestTaskListPlacesDisabledTasksAfterActiveOnes(t *testing.T) {
 	for i, want := range wantNames {
 		if gotNames[i] != want {
 			t.Fatalf("expected order %v, got %v", wantNames, gotNames)
+		}
+	}
+}
+
+func TestTaskListKeepsStableOrderWhenTaskStatusChangesToRunning(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
+	engine := newProtectedRouter()
+	user := testutil.MustCreateUser(t, "stable-order-operator", "operator")
+	accessToken := testutil.MustCreateAccessToken(t, user.Username, user.Role)
+
+	tasks := []*model.Task{
+		{Name: "active first", Command: "echo first", CronExpression: "0 0 * * *", SortOrder: 10},
+		{Name: "active second", Command: "echo second", CronExpression: "0 0 * * *", SortOrder: 20},
+		{Name: "active third", Command: "echo third", CronExpression: "0 0 * * *", SortOrder: 30},
+		{Name: "disabled last", Command: "echo disabled", CronExpression: "0 0 * * *", SortOrder: 40},
+	}
+	for _, task := range tasks {
+		if err := database.DB.Create(task).Error; err != nil {
+			t.Fatalf("create task %q: %v", task.Name, err)
+		}
+	}
+	if err := database.DB.Model(tasks[0]).Update("status", model.TaskStatusEnabled).Error; err != nil {
+		t.Fatalf("set enabled status for %q: %v", tasks[0].Name, err)
+	}
+	if err := database.DB.Model(tasks[1]).Update("status", model.TaskStatusRunning).Error; err != nil {
+		t.Fatalf("set running status for %q: %v", tasks[1].Name, err)
+	}
+	if err := database.DB.Model(tasks[2]).Update("status", model.TaskStatusQueued).Error; err != nil {
+		t.Fatalf("set queued status for %q: %v", tasks[2].Name, err)
+	}
+	if err := database.DB.Model(tasks[3]).Update("status", model.TaskStatusDisabled).Error; err != nil {
+		t.Fatalf("set disabled status for %q: %v", tasks[3].Name, err)
+	}
+
+	rec := performRequest(engine, http.MethodGet, "/api/v1/tasks", map[string]string{
+		"Authorization": "Bearer " + accessToken,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	payload := decodeJSONMap(t, rec)
+	items, ok := payload["data"].([]interface{})
+	if !ok {
+		t.Fatalf("expected data array, got %#v", payload["data"])
+	}
+	if len(items) < 4 {
+		t.Fatalf("expected at least 4 tasks, got %d", len(items))
+	}
+
+	gotNames := make([]string, 0, 4)
+	for i := 0; i < 4; i++ {
+		item, ok := items[i].(map[string]interface{})
+		if !ok {
+			t.Fatalf("expected task object at %d, got %#v", i, items[i])
+		}
+		gotNames = append(gotNames, item["name"].(string))
+	}
+
+	wantNames := []string{
+		"active first",
+		"active second",
+		"active third",
+		"disabled last",
+	}
+	for i, want := range wantNames {
+		if gotNames[i] != want {
+			t.Fatalf("expected stable active order %v, got %v", wantNames, gotNames)
 		}
 	}
 }
@@ -541,6 +611,78 @@ func TestTaskCreateAndUpdateRandomDelaySettings(t *testing.T) {
 	}
 	if stored.RandomDelaySeconds != nil {
 		t.Fatalf("expected stored random_delay_seconds=nil, got %v", *stored.RandomDelaySeconds)
+	}
+}
+
+func TestTaskDisableRunningTaskKeepsCurrentExecutionState(t *testing.T) {
+	testutil.SetupTestEnv(t)
+	service.ShutdownSchedulerV2()
+	service.InitSchedulerV2()
+	t.Cleanup(service.ShutdownSchedulerV2)
+
+	engine := newProtectedRouter()
+	user := testutil.MustCreateUser(t, "running-disable-operator", "operator")
+	accessToken := testutil.MustCreateAccessToken(t, user.Username, user.Role)
+
+	task := &model.Task{
+		Name:           "running disable task",
+		Command:        "echo running",
+		CronExpression: "0 0 * * *",
+		Status:         model.TaskStatusEnabled,
+	}
+	if err := database.DB.Create(task).Error; err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	if scheduler := service.GetSchedulerV2(); scheduler != nil {
+		if err := scheduler.AddJob(task); err != nil {
+			t.Fatalf("add job: %v", err)
+		}
+		if !scheduler.HasJob(task.ID) {
+			t.Fatalf("expected task %d to be registered before disable", task.ID)
+		}
+	}
+
+	if err := database.DB.Model(task).Update("status", model.TaskStatusRunning).Error; err != nil {
+		t.Fatalf("set running status: %v", err)
+	}
+
+	rec := performRequest(engine, http.MethodPut, "/api/v1/tasks/"+strconv.FormatUint(uint64(task.ID), 10)+"/disable", map[string]string{
+		"Authorization": "Bearer " + accessToken,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected disable 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	payload := decodeJSONMap(t, rec)
+	if got, _ := payload["message"].(string); got != "已设置为禁用，当前执行结束后生效" {
+		t.Fatalf("unexpected disable message: %#v", payload["message"])
+	}
+
+	item, ok := payload["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected task payload, got %#v", payload["data"])
+	}
+	if got, ok := item["status"].(float64); !ok || got != model.TaskStatusRunning {
+		t.Fatalf("expected running task to stay running in payload, got %#v", item["status"])
+	}
+
+	var stored model.Task
+	if err := database.DB.First(&stored, task.ID).Error; err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+	if stored.Status != model.TaskStatusRunning {
+		t.Fatalf("expected stored task to remain running, got %v", stored.Status)
+	}
+
+	scheduler := service.GetSchedulerV2()
+	if scheduler == nil {
+		t.Fatal("expected scheduler to be initialized")
+	}
+	if scheduler.HasJob(task.ID) {
+		t.Fatalf("expected task %d schedule to be removed after disable", task.ID)
+	}
+	if got := service.ResolveTaskInactiveStatus(&stored); got != model.TaskStatusDisabled {
+		t.Fatalf("expected task to resolve to disabled after current run, got %v", got)
 	}
 }
 

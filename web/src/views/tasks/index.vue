@@ -160,9 +160,81 @@ function formatTime(time: string | null) {
   return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
+const scriptFilePattern = /\.(?:js|ts|py|sh|go)$/i
+
+function tokenizeCommand(command: string) {
+  const tokens: string[] = []
+  let current = ''
+  let quote: '"' | "'" | null = null
+
+  for (let i = 0; i < command.length; i += 1) {
+    const char = command[i] ?? ''
+    if (quote) {
+      if (char === quote) {
+        quote = null
+        continue
+      }
+      current += char
+      continue
+    }
+
+    if (char === '"' || char === "'") {
+      quote = char
+      continue
+    }
+
+    if (/\s/.test(char)) {
+      if (current) {
+        tokens.push(current)
+        current = ''
+      }
+      continue
+    }
+
+    current += char
+  }
+
+  if (current) {
+    tokens.push(current)
+  }
+
+  return tokens
+}
+
+function firstScriptToken(tokens: string[]) {
+  return tokens.find(token => scriptFilePattern.test(token)) || null
+}
+
 function extractScriptPath(command: string) {
-  const match = command.match(/(?:task\s+|node\s+|python3?\s+|bash\s+|sh\s+|ts-node\s+)?(\S+\.(?:js|ts|py|sh))/i)
-  return match ? match[1] : null
+  const tokens = tokenizeCommand(command)
+  if (tokens.length === 0) return null
+
+  const entry = tokens[0]
+  if (!entry) return null
+  const rest = tokens.slice(1)
+  const normalizedEntry = entry.toLowerCase()
+
+  if (normalizedEntry === 'task') {
+    for (let i = 0; i < rest.length; i += 1) {
+      const token = rest[i]
+      if (!token) continue
+      if (token === '--') break
+      if (token === '-m') {
+        i += 1
+        continue
+      }
+      if (scriptFilePattern.test(token)) {
+        return token
+      }
+    }
+    return null
+  }
+
+  if (['node', 'nodejs', 'python', 'python3', 'bash', 'sh', 'ts-node', 'go'].includes(normalizedEntry)) {
+    return firstScriptToken(rest)
+  }
+
+  return firstScriptToken(tokens)
 }
 
 function navigateToScript(path: string) {
@@ -260,14 +332,20 @@ async function handleStop(task: any) {
 async function handleToggle(task: any) {
   try {
     if (task.status === 0) {
-      await taskApi.enable(task.id)
-      ElMessage.success('已启用')
+      await ElMessageBox.confirm(`确认启用定时任务「${task.name}」吗？`, '启用确认', { type: 'info' })
+      const res = await taskApi.enable(task.id)
+      ElMessage.success(res.message || '已启用')
     } else {
-      await taskApi.disable(task.id)
-      ElMessage.success('已禁用')
+      const confirmMessage = task.status === 2
+        ? `确认禁用定时任务「${task.name}」吗？当前执行不会被中断，禁用会在本次运行结束后生效。`
+        : `确认禁用定时任务「${task.name}」吗？`
+      await ElMessageBox.confirm(confirmMessage, '禁用确认', { type: 'warning' })
+      const res = await taskApi.disable(task.id)
+      ElMessage.success(res.message || (task.status === 2 ? '已设置为禁用，当前执行结束后生效' : '已禁用'))
     }
     loadTasks()
   } catch (err: any) {
+    if (err === 'cancel' || err?.toString?.() === 'cancel') return
     ElMessage.error(err?.response?.data?.error || '操作失败')
   }
 }

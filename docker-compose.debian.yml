@@ -2,7 +2,7 @@ name: daidai-panel
 
 services:
   daidai-panel:
-    image: linzixuanzz/daidai-panel:debian
+    image: docker.1ms.run/linzixuanzz/daidai-panel:debian
     container_name: daidai-panel
     restart: unless-stopped
     ports:
@@ -13,4 +13,4 @@ services:
     environment:
       - TZ=Asia/Shanghai
       - CONTAINER_NAME=daidai-panel
-      - IMAGE_NAME=linzixuanzz/daidai-panel:debian
+      - IMAGE_NAME=docker.1ms.run/linzixuanzz/daidai-panel:debian

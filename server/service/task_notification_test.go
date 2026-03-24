@@ -52,6 +52,9 @@ func TestBuildTaskExecutionNotificationIncludesFailureExcerpt(t *testing.T) {
 	if got := context["error_log"]; got == "" {
 		t.Fatal("expected error_log context to be populated")
 	}
+	if got := context["reason"]; got == "" {
+		t.Fatal("expected reason context to be populated")
+	}
 	if got := context["failure_reason"]; got == "" {
 		t.Fatal("expected failure_reason context to be populated")
 	}

@@ -52,9 +52,19 @@ async function handleCreate() {
 
 async function handleToggle(row: any) {
   try {
+    const enabling = !row.enabled
+    await ElMessageBox.confirm(
+      enabling
+        ? `确认启用用户 ${row.username} 吗？`
+        : `确认禁用用户 ${row.username} 吗？禁用后该账号将无法继续登录。`,
+      enabling ? '启用确认' : '禁用确认',
+      { type: enabling ? 'info' : 'warning' }
+    )
     await userApi.update(row.id, { enabled: !row.enabled })
+    ElMessage.success(row.enabled ? '已禁用' : '已启用')
     loadUsers()
-  } catch {
+  } catch (err: any) {
+    if (err === 'cancel' || err?.toString?.() === 'cancel') return
     ElMessage.error('操作失败')
   }
 }

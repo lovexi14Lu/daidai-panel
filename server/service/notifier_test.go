@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"daidai-panel/testutil"
 )
 
 func TestSplitNotificationTargets(t *testing.T) {
@@ -73,6 +75,8 @@ func TestBuildTelegramMessagesSplitsLongContent(t *testing.T) {
 }
 
 func TestSendWecomTextWithMentions(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
 	var body map[string]interface{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -112,6 +116,8 @@ func TestSendWecomTextWithMentions(t *testing.T) {
 }
 
 func TestSendWecomTemplateCard(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
 	var body map[string]interface{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -153,6 +159,8 @@ func TestSendWecomTemplateCard(t *testing.T) {
 }
 
 func TestSendWecomAppMarkdown(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
 	var (
 		tokenRequested bool
 		messageBody    map[string]interface{}
@@ -224,6 +232,8 @@ func TestSendWecomAppMarkdown(t *testing.T) {
 }
 
 func TestSendWecomAppTextWithAdvancedOptions(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
 	var (
 		tokenRequested bool
 		messageBody    map[string]interface{}
@@ -303,6 +313,8 @@ func TestSendWecomAppTextWithAdvancedOptions(t *testing.T) {
 }
 
 func TestSendWecomAppTemplateCard(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
 	var messageBody map[string]interface{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -364,7 +376,94 @@ func TestSendWecomAppTemplateCard(t *testing.T) {
 	}
 }
 
+func TestSendWecomAppMpnews(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
+	var messageBody map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cgi-bin/gettoken":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"errcode":0,"errmsg":"ok","access_token":"token-demo"}`))
+		case "/cgi-bin/message/send":
+			if err := json.NewDecoder(r.Body).Decode(&messageBody); err != nil {
+				t.Fatalf("decode message body: %v", err)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"errcode":0,"errmsg":"ok"}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	oldTokenURL := wecomAppTokenURL
+	oldSendURL := wecomAppSendURL
+	wecomAppTokenURL = server.URL + "/cgi-bin/gettoken"
+	wecomAppSendURL = server.URL + "/cgi-bin/message/send"
+	defer func() {
+		wecomAppTokenURL = oldTokenURL
+		wecomAppSendURL = oldSendURL
+	}()
+
+	err := sendWecomApp(map[string]string{
+		"corp_id":         "ww-demo",
+		"secret":          "secret-demo",
+		"agent_id":        "1000001",
+		"to_user":         "@all",
+		"msg_type":        "mpnews",
+		"safe":            "2",
+		"enable_id_trans": "1",
+		"mpnews_articles": `[
+			{
+				"title":"{{title}}",
+				"thumb_media_id":"MEDIA_ID",
+				"author":"Author",
+				"content_source_url":"https://example.com/article",
+				"content":"<p>{{content}}</p>",
+				"digest":"Digest description"
+			}
+		]`,
+	}, "系统通知", "任务执行完成")
+	if err != nil {
+		t.Fatalf("send wecom app mpnews: %v", err)
+	}
+
+	if got := messageBody["msgtype"]; got != "mpnews" {
+		t.Fatalf("unexpected msgtype: %#v", got)
+	}
+	if got := messageBody["safe"]; got != float64(2) {
+		t.Fatalf("unexpected safe: %#v", got)
+	}
+	if got := messageBody["enable_id_trans"]; got != float64(1) {
+		t.Fatalf("unexpected enable_id_trans: %#v", got)
+	}
+	mpnews, ok := messageBody["mpnews"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("unexpected mpnews payload: %#v", messageBody["mpnews"])
+	}
+	articles, ok := mpnews["articles"].([]interface{})
+	if !ok || len(articles) != 1 {
+		t.Fatalf("unexpected mpnews articles: %#v", mpnews["articles"])
+	}
+	article, ok := articles[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("unexpected article payload: %#v", articles[0])
+	}
+	if got := article["title"]; got != "系统通知" {
+		t.Fatalf("unexpected article title: %#v", got)
+	}
+	if got := article["thumb_media_id"]; got != "MEDIA_ID" {
+		t.Fatalf("unexpected thumb_media_id: %#v", got)
+	}
+	if got := article["content"]; got != "<p>任务执行完成</p>" {
+		t.Fatalf("unexpected article content: %#v", got)
+	}
+}
+
 func TestSendWecomAppReturnsEnterpriseError(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/cgi-bin/gettoken":

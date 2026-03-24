@@ -297,6 +297,17 @@ onBeforeUnmount(() => {
           <el-icon><Download /></el-icon>
           镜像：{{ updateStatus.image_name }}
         </span>
+        <span
+          v-if="updateStatus?.pull_image_name && updateStatus.pull_image_name !== updateStatus.image_name"
+          class="update-target-chip"
+        >
+          <el-icon><Download /></el-icon>
+          拉取：{{ updateStatus.pull_image_name }}
+        </span>
+        <span v-if="updateStatus?.mirror_host" class="update-target-chip">
+          <el-icon><RefreshRight /></el-icon>
+          镜像源：{{ updateStatus.mirror_host }}
+        </span>
       </div>
 
       <div class="update-progress-steps">
