@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { SponsorRecord, SponsorSummary } from '@/api/sponsor'
 
 const props = defineProps<{
@@ -8,19 +8,47 @@ const props = defineProps<{
   loading: boolean
 }>()
 
+const avatarRetryDelayMs = 1800
+const avatarRetryLimit = 2
 const brokenAvatarKeys = ref<string[]>([])
+const avatarRetryAttempts = ref<Record<string, number>>({})
+const avatarRetryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 function sponsorAvatarKey(sponsor: Pick<SponsorRecord, 'id' | 'avatar_url'>) {
   return `${sponsor.id}:${sponsor.avatar_url || ''}`
 }
 
+function clearAvatarRetryTimer(key: string) {
+  const timer = avatarRetryTimers.get(key)
+  if (timer) {
+    clearTimeout(timer)
+    avatarRetryTimers.delete(key)
+  }
+}
+
 watch(
   () => props.sponsors.map(sponsorAvatarKey),
   (keys) => {
-    brokenAvatarKeys.value = brokenAvatarKeys.value.filter((key) => keys.includes(key))
+    const activeKeys = new Set(keys)
+    brokenAvatarKeys.value = brokenAvatarKeys.value.filter((key) => activeKeys.has(key))
+    avatarRetryAttempts.value = Object.fromEntries(
+      Object.entries(avatarRetryAttempts.value).filter(([key]) => activeKeys.has(key))
+    )
+
+    for (const key of Array.from(avatarRetryTimers.keys())) {
+      if (!activeKeys.has(key)) {
+        clearAvatarRetryTimer(key)
+      }
+    }
   },
   { immediate: true }
 )
+
+onBeforeUnmount(() => {
+  for (const key of Array.from(avatarRetryTimers.keys())) {
+    clearAvatarRetryTimer(key)
+  }
+})
 
 const sortedSponsors = computed(() => {
   return [...props.sponsors].sort((left, right) => {
@@ -56,9 +84,26 @@ const sponsorServiceUnavailable = computed(() => !!props.summary?.unavailable)
 
 function markAvatarBroken(sponsor: SponsorRecord) {
   const key = sponsorAvatarKey(sponsor)
+  const attempt = (avatarRetryAttempts.value[key] || 0) + 1
+  avatarRetryAttempts.value = {
+    ...avatarRetryAttempts.value,
+    [key]: attempt,
+  }
+
   if (!brokenAvatarKeys.value.includes(key)) {
     brokenAvatarKeys.value = [...brokenAvatarKeys.value, key]
   }
+
+  if (attempt > avatarRetryLimit) {
+    clearAvatarRetryTimer(key)
+    return
+  }
+
+  clearAvatarRetryTimer(key)
+  avatarRetryTimers.set(key, setTimeout(() => {
+    clearAvatarRetryTimer(key)
+    brokenAvatarKeys.value = brokenAvatarKeys.value.filter((item) => item !== key)
+  }, avatarRetryDelayMs * attempt))
 }
 
 function isAvatarBroken(sponsor: SponsorRecord) {
@@ -127,6 +172,7 @@ function rankLabel(rank: number) {
                   v-if="entry.sponsor.avatar_url && !isAvatarBroken(entry.sponsor)"
                   :src="entry.sponsor.avatar_url"
                   :alt="entry.sponsor.name"
+                  referrerpolicy="no-referrer"
                   @error="markAvatarBroken(entry.sponsor)"
                 />
                 <span v-else>{{ entry.sponsor.initial }}</span>
@@ -151,6 +197,7 @@ function rankLabel(rank: number) {
               v-if="sponsor.avatar_url && !isAvatarBroken(sponsor)"
               :src="sponsor.avatar_url"
               :alt="sponsor.name"
+              referrerpolicy="no-referrer"
               @error="markAvatarBroken(sponsor)"
             />
             <span v-else>{{ sponsor.initial }}</span>

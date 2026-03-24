@@ -153,7 +153,7 @@ func resolveRemoteURL(feedURL, target string) string {
 		return ""
 	}
 	lower := strings.ToLower(target)
-	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") || strings.HasPrefix(lower, "data:") {
+	if strings.HasPrefix(lower, "data:") {
 		return target
 	}
 
@@ -165,7 +165,29 @@ func resolveRemoteURL(feedURL, target string) string {
 	if err != nil {
 		return target
 	}
-	return base.ResolveReference(ref).String()
+
+	if ref.IsAbs() {
+		return normalizeResolvedRemoteURL(base, ref)
+	}
+
+	return normalizeResolvedRemoteURL(base, base.ResolveReference(ref))
+}
+
+func normalizeResolvedRemoteURL(base, resolved *url.URL) string {
+	if base == nil || resolved == nil {
+		return ""
+	}
+
+	if strings.EqualFold(base.Scheme, "https") &&
+		strings.EqualFold(resolved.Scheme, "http") &&
+		strings.EqualFold(base.Hostname(), resolved.Hostname()) &&
+		base.Hostname() != "" {
+		cloned := *resolved
+		cloned.Scheme = "https"
+		return cloned.String()
+	}
+
+	return resolved.String()
 }
 
 func sponsorInitial(name string) string {

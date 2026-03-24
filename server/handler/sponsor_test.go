@@ -124,3 +124,25 @@ func TestSponsorListProxiesRemoteFeed(t *testing.T) {
 		t.Fatalf("expected panel sponsor proxy to strip portal_url, got %s", rec.Body.String())
 	}
 }
+
+func TestResolveRemoteURLUpgradesSameHostAvatarToHTTPS(t *testing.T) {
+	got := resolveRemoteURL(
+		"https://dumblist.9999.blue/api/public/sponsors",
+		"http://dumblist.9999.blue/uploads/demo.png",
+	)
+
+	if got != "https://dumblist.9999.blue/uploads/demo.png" {
+		t.Fatalf("expected same-host avatar url upgraded to https, got %q", got)
+	}
+}
+
+func TestResolveRemoteURLKeepsThirdPartyAbsoluteAvatarURL(t *testing.T) {
+	got := resolveRemoteURL(
+		"https://dumblist.9999.blue/api/public/sponsors",
+		"http://example.com/uploads/demo.png",
+	)
+
+	if got != "http://example.com/uploads/demo.png" {
+		t.Fatalf("expected third-party avatar url unchanged, got %q", got)
+	}
+}
