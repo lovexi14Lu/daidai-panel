@@ -270,14 +270,16 @@ func (h *SystemHandler) PublicVersion(c *gin.Context) {
 func (h *SystemHandler) PanelSettings(c *gin.Context) {
 	title := model.GetRegisteredConfig("panel_title")
 	icon := model.GetRegisteredConfig("panel_icon")
+	editorBackgroundColor := model.GetRegisteredConfig("editor_background_color")
 	logBackgroundColor := model.GetRegisteredConfig("log_background_color")
 	logBackgroundImage := model.GetRegisteredConfig("log_background_image")
 	response.Success(c, gin.H{
 		"data": gin.H{
-			"panel_title":          title,
-			"panel_icon":           icon,
-			"log_background_color": logBackgroundColor,
-			"log_background_image": logBackgroundImage,
+			"panel_title":             title,
+			"panel_icon":              icon,
+			"editor_background_color": editorBackgroundColor,
+			"log_background_color":    logBackgroundColor,
+			"log_background_image":    logBackgroundImage,
 		},
 	})
 }

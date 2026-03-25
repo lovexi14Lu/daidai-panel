@@ -48,6 +48,14 @@ defineProps<{
         <span class="form-hint">上传 SVG 格式图标自定义面板图标，留空使用默认图标</span>
       </div>
       <div class="form-field">
+        <label>编辑器背景颜色</label>
+        <div class="log-bg-controls">
+          <el-color-picker v-model="form.editor_background_color" />
+          <el-input v-model="form.editor_background_color" placeholder="留空使用默认编辑器背景" />
+        </div>
+        <span class="form-hint">统一应用到脚本只读预览和在线编辑器，留空保持默认深色背景</span>
+      </div>
+      <div class="form-field">
         <label>日志背景颜色</label>
         <div class="log-bg-controls">
           <el-color-picker v-model="form.log_background_color" show-alpha />

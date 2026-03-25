@@ -11,7 +11,7 @@ export function useSettingsConfig() {
 
   const configForm = ref<SettingsConfigForm>({
     max_concurrent_tasks: 5,
-    command_timeout: 300,
+    command_timeout: 86400,
     log_retention_days: 7,
     max_log_content_size: 102400,
     random_delay: '',
@@ -35,6 +35,7 @@ export function useSettingsConfig() {
     captcha_fail_mode: 'open',
     panel_title: '',
     panel_icon: '',
+    editor_background_color: '',
     log_background_color: '#0f172a',
     log_background_image: ''
   })
@@ -67,7 +68,7 @@ export function useSettingsConfig() {
 
       configForm.value = {
         max_concurrent_tasks: readConfigNumber(cfgs, 'max_concurrent_tasks', 5),
-        command_timeout: readConfigNumber(cfgs, 'command_timeout', 300),
+        command_timeout: readConfigNumber(cfgs, 'command_timeout', 86400),
         log_retention_days: readConfigNumber(cfgs, 'log_retention_days', 7),
         max_log_content_size: readConfigNumber(cfgs, 'max_log_content_size', 102400),
         random_delay: readConfigString(cfgs, 'random_delay', ''),
@@ -91,6 +92,7 @@ export function useSettingsConfig() {
         captcha_fail_mode: readConfigString(cfgs, 'captcha_fail_mode', 'open'),
         panel_title: readConfigString(cfgs, 'panel_title', ''),
         panel_icon: readConfigString(cfgs, 'panel_icon', ''),
+        editor_background_color: readConfigString(cfgs, 'editor_background_color', ''),
         log_background_color: readConfigString(cfgs, 'log_background_color', '#0f172a'),
         log_background_image: readConfigString(cfgs, 'log_background_image', '')
       }
@@ -123,7 +125,7 @@ export function useSettingsConfig() {
     void saveConfigKeys([
       'auto_add_cron', 'auto_del_cron', 'default_cron_rule', 'repo_file_extensions',
       'cpu_warn', 'memory_warn', 'disk_warn', 'notify_on_resource_warn', 'notify_on_login',
-      'panel_title', 'panel_icon', 'log_background_color', 'log_background_image'
+      'panel_title', 'panel_icon', 'editor_background_color', 'log_background_color', 'log_background_image'
     ])
   }
 

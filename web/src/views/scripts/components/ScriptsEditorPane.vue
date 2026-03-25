@@ -169,8 +169,8 @@ function startEdit() {
   height: 100%;
   overflow: auto;
   padding: 18px 20px;
-  background: #111827;
-  color: #e5e7eb;
+  background: var(--dd-editor-bg-color, #111827);
+  color: var(--dd-editor-fg-color, #e5e7eb);
   font-size: 13px;
   line-height: 1.6;
   font-family: var(--dd-font-mono, Consolas, 'Courier New', monospace);

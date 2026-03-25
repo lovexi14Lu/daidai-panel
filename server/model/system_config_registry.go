@@ -40,7 +40,7 @@ type systemConfigSpec struct {
 
 var registeredSystemConfigSpecs = []systemConfigSpec{
 	newIntConfig("max_concurrent_tasks", "5", "定时任务最大并发数", "tasks", 1, 128),
-	newIntConfig("command_timeout", "300", "全局默认超时（秒）", "tasks", 1, 604800),
+	newIntConfig("command_timeout", "86400", "全局默认超时（秒）", "tasks", 1, 604800),
 	newIntConfig("log_retention_days", "7", "日志保留天数", "tasks", 1, 3650),
 	newIntConfig("max_log_content_size", "102400", "任务日志内容最大保留字节数", "tasks", 1024, 10485760),
 	newIntConfig("random_delay", "0", "任务执行前随机延迟最大秒数", "tasks", 0, 86400),
@@ -66,6 +66,7 @@ var registeredSystemConfigSpecs = []systemConfigSpec{
 	),
 	newTrimmedStringConfig("panel_title", "呆呆面板", "面板标题", "branding"),
 	newTrimmedStringConfig("panel_icon", "", "面板图标（SVG data URL）", "branding"),
+	newTrimmedStringConfig("editor_background_color", "", "脚本编辑器背景颜色（留空使用默认样式）", "branding"),
 	newTrimmedStringConfig("log_background_color", "#0f172a", "日志视图背景颜色（建议使用深色）", "branding"),
 	newTrimmedStringConfig("log_background_image", "", "日志视图背景图片（data URL）", "branding"),
 	newBoolConfig("captcha_enabled", "false", "极验验证码开关（连续失败 3 次后触发）", "security"),

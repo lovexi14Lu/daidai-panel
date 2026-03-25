@@ -66,8 +66,8 @@ func TestRegisteredConfigUsesRegistryDefaults(t *testing.T) {
 	if got := model.GetRegisteredConfig("panel_title"); got != "呆呆面板" {
 		t.Fatalf("expected registry default panel_title, got %q", got)
 	}
-	if got := model.GetRegisteredConfigInt("command_timeout"); got != 300 {
-		t.Fatalf("expected registry default command_timeout 300, got %d", got)
+	if got := model.GetRegisteredConfigInt("command_timeout"); got != 86400 {
+		t.Fatalf("expected registry default command_timeout 86400, got %d", got)
 	}
 	if got := model.GetRegisteredConfigBool("notify_on_login"); got {
 		t.Fatalf("expected registry default notify_on_login to be false")

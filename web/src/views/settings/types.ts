@@ -26,6 +26,7 @@ export interface SettingsConfigForm {
   captcha_fail_mode: CaptchaFailMode | string
   panel_title: string
   panel_icon: string
+  editor_background_color: string
   log_background_color: string
   log_background_image: string
 }
