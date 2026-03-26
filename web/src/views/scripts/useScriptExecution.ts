@@ -1,4 +1,4 @@
-import { onBeforeUnmount, ref, watch, type Ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { scriptApi } from '@/api/script'
 
@@ -33,31 +33,106 @@ export function useScriptExecution({ selectedFile, fileContent }: UseScriptExecu
     return path.split('/').pop() || path
   }
 
-  watch(showDebugDialog, (val) => {
-    if (!val && debugTimer) {
-      clearInterval(debugTimer)
-      debugTimer = null
-      debugRunning.value = false
-    }
-  })
-
-  watch(showCodeRunner, (val) => {
-    if (!val && runnerTimer) {
-      clearInterval(runnerTimer)
-      runnerTimer = null
-      runnerRunning.value = false
-    }
-  })
-
-  onBeforeUnmount(() => {
+  function clearDebugTimer() {
     if (debugTimer) {
       clearInterval(debugTimer)
       debugTimer = null
     }
+  }
+
+  function clearRunnerTimer() {
     if (runnerTimer) {
       clearInterval(runnerTimer)
       runnerTimer = null
     }
+  }
+
+  async function stopDebugRun(options?: { keepalive?: boolean; preserveLogs?: boolean }) {
+    const runId = debugRunId.value
+    clearDebugTimer()
+    debugRunning.value = false
+    debugRunId.value = ''
+
+    if (!runId) {
+      return
+    }
+
+    if (options?.keepalive) {
+      scriptApi.debugStopKeepalive(runId)
+      return
+    }
+
+    try {
+      await scriptApi.debugStop(runId)
+    } catch {
+      // ignore
+    }
+
+    if (!options?.preserveLogs) {
+      return
+    }
+
+    try {
+      const res = await scriptApi.debugLogs(runId)
+      debugLogs.value = res.data.logs || []
+      if (res.data.status === 'failed') {
+        debugExitCode.value = res.data.exit_code ?? null
+        debugError.value = 'failed'
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  async function stopRunnerRun(options?: { keepalive?: boolean }) {
+    const runId = runnerRunId.value
+    clearRunnerTimer()
+    runnerRunning.value = false
+    runnerRunId.value = ''
+
+    if (!runId) {
+      return
+    }
+
+    if (options?.keepalive) {
+      scriptApi.debugStopKeepalive(runId)
+      return
+    }
+
+    try {
+      await scriptApi.debugStop(runId)
+    } catch {
+      // ignore
+    }
+  }
+
+  function handleWindowPageHide() {
+    void stopDebugRun({ keepalive: true })
+    void stopRunnerRun({ keepalive: true })
+  }
+
+  watch(showDebugDialog, (val) => {
+    if (!val) {
+      void stopDebugRun()
+    }
+  })
+
+  watch(showCodeRunner, (val) => {
+    if (!val) {
+      void stopRunnerRun()
+    }
+  })
+
+  onMounted(() => {
+    window.addEventListener('pagehide', handleWindowPageHide)
+    window.addEventListener('beforeunload', handleWindowPageHide)
+  })
+
+  onBeforeUnmount(() => {
+    window.removeEventListener('pagehide', handleWindowPageHide)
+    window.removeEventListener('beforeunload', handleWindowPageHide)
+    void stopDebugRun()
+    void stopRunnerRun()
   })
 
   async function handleDebugRun() {
@@ -101,13 +176,10 @@ export function useScriptExecution({ selectedFile, fileContent }: UseScriptExecu
   }
 
   function pollDebugLogs() {
-    if (debugTimer) clearInterval(debugTimer)
+    clearDebugTimer()
     debugTimer = setInterval(async () => {
       if (!debugRunId.value) {
-        if (debugTimer) {
-          clearInterval(debugTimer)
-          debugTimer = null
-        }
+        clearDebugTimer()
         return
       }
       try {
@@ -115,10 +187,8 @@ export function useScriptExecution({ selectedFile, fileContent }: UseScriptExecu
         debugLogs.value = res.data.logs || []
         if (res.data.done) {
           debugRunning.value = false
-          if (debugTimer) {
-            clearInterval(debugTimer)
-            debugTimer = null
-          }
+          clearDebugTimer()
+          debugRunId.value = ''
           if (res.data.status === 'failed') {
             debugExitCode.value = res.data.exit_code ?? null
             debugError.value = 'failed'
@@ -126,32 +196,13 @@ export function useScriptExecution({ selectedFile, fileContent }: UseScriptExecu
         }
       } catch {
         debugRunning.value = false
-        if (debugTimer) {
-          clearInterval(debugTimer)
-          debugTimer = null
-        }
+        clearDebugTimer()
       }
     }, 500)
   }
 
   async function handleDebugStop() {
-    if (!debugRunId.value) return
-    try {
-      await scriptApi.debugStop(debugRunId.value)
-    } catch {
-      // ignore
-    }
-    debugRunning.value = false
-    if (debugTimer) {
-      clearInterval(debugTimer)
-      debugTimer = null
-    }
-    try {
-      const res = await scriptApi.debugLogs(debugRunId.value)
-      debugLogs.value = res.data.logs || []
-    } catch {
-      // ignore
-    }
+    await stopDebugRun({ preserveLogs: true })
   }
 
   function openCodeRunner() {
@@ -183,13 +234,10 @@ export function useScriptExecution({ selectedFile, fileContent }: UseScriptExecu
   }
 
   function pollRunnerLogs() {
-    if (runnerTimer) clearInterval(runnerTimer)
+    clearRunnerTimer()
     runnerTimer = setInterval(async () => {
       if (!runnerRunId.value) {
-        if (runnerTimer) {
-          clearInterval(runnerTimer)
-          runnerTimer = null
-        }
+        clearRunnerTimer()
         return
       }
       try {
@@ -198,33 +246,18 @@ export function useScriptExecution({ selectedFile, fileContent }: UseScriptExecu
         if (res.data.done) {
           runnerRunning.value = false
           runnerExitCode.value = res.data.exit_code ?? null
-          if (runnerTimer) {
-            clearInterval(runnerTimer)
-            runnerTimer = null
-          }
+          clearRunnerTimer()
+          runnerRunId.value = ''
         }
       } catch {
         runnerRunning.value = false
-        if (runnerTimer) {
-          clearInterval(runnerTimer)
-          runnerTimer = null
-        }
+        clearRunnerTimer()
       }
     }, 500)
   }
 
   async function handleStopRunner() {
-    if (!runnerRunId.value) return
-    try {
-      await scriptApi.debugStop(runnerRunId.value)
-    } catch {
-      // ignore
-    }
-    runnerRunning.value = false
-    if (runnerTimer) {
-      clearInterval(runnerTimer)
-      runnerTimer = null
-    }
+    await stopRunnerRun()
   }
 
   return {

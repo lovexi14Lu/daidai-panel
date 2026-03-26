@@ -108,11 +108,12 @@ func (run *debugRun) stop() {
 		return
 	}
 
-	run.Process.Kill()
+	service.KillProcessGroup(run.Process)
 	run.Status = "stopped"
 	exitCode := -1
 	run.ExitCode = &exitCode
 	run.Done = true
+	run.Logs = append(run.Logs, "[调试运行已停止]")
 }
 
 func (run *debugRun) killIfRunning() {
@@ -120,8 +121,14 @@ func (run *debugRun) killIfRunning() {
 	defer run.mu.Unlock()
 
 	if run.Process != nil && !run.Done {
-		run.Process.Kill()
+		service.KillProcessGroup(run.Process)
 	}
+}
+
+func (run *debugRun) isStopped() bool {
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	return run.Status == "stopped"
 }
 
 func (run *debugRun) finish(exitCode int, waitErr error, elapsed float64) {
@@ -235,6 +242,7 @@ func newScriptCommand(cmdParts []string, workDir string, env []string) *exec.Cmd
 	cmd := exec.Command(cmdParts[0], cmdParts[1:]...)
 	cmd.Dir = workDir
 	cmd.Env = env
+	service.SetPgid(cmd)
 	return cmd
 }
 

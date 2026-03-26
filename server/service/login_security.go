@@ -18,14 +18,15 @@ const (
 	CaptchaThreshold = 3
 )
 
-func RecordLoginLog(userID uint, username, ip, userAgent string, status int, message string) {
+func RecordLoginLog(userID uint, username, ip, clientName, userAgent string, status int, message string) {
 	log := model.LoginLog{
-		UserID:    userID,
-		Username:  username,
-		IP:        ip,
-		UserAgent: userAgent,
-		Status:    status,
-		Message:   message,
+		UserID:     userID,
+		Username:   username,
+		IP:         ip,
+		ClientName: clientName,
+		UserAgent:  userAgent,
+		Status:     status,
+		Message:    message,
 	}
 	database.DB.Create(&log)
 }
@@ -101,7 +102,7 @@ func CleanExpiredAttempts() {
 	database.DB.Where("expires_at < ?", time.Now()).Delete(&model.LoginAttempt{})
 }
 
-func CreateSessionWithRefresh(userID uint, username, accessJTI, refreshJTI, clientType, ip, userAgent string, accessExpiresAt, refreshExpiresAt time.Time) {
+func CreateSessionWithRefresh(userID uint, username, accessJTI, refreshJTI, clientType, clientName, ip, userAgent string, accessExpiresAt, refreshExpiresAt time.Time) {
 	var refreshExpiryPtr *time.Time
 	if !refreshExpiresAt.IsZero() {
 		refreshExpiryPtr = &refreshExpiresAt
@@ -116,6 +117,7 @@ func CreateSessionWithRefresh(userID uint, username, accessJTI, refreshJTI, clie
 		JTI:              accessJTI,
 		RefreshJTI:       refreshJTI,
 		ClientType:       normalizedClientType,
+		ClientName:       clientName,
 		IP:               ip,
 		UserAgent:        userAgent,
 		ExpiresAt:        accessExpiresAt,
@@ -124,8 +126,8 @@ func CreateSessionWithRefresh(userID uint, username, accessJTI, refreshJTI, clie
 	database.DB.Create(&session)
 }
 
-func CreateSession(userID uint, username, jti, clientType, ip, userAgent string, expiresAt time.Time) {
-	CreateSessionWithRefresh(userID, username, jti, "", clientType, ip, userAgent, expiresAt, time.Time{})
+func CreateSession(userID uint, username, jti, clientType, clientName, ip, userAgent string, expiresAt time.Time) {
+	CreateSessionWithRefresh(userID, username, jti, "", clientType, clientName, ip, userAgent, expiresAt, time.Time{})
 }
 
 func effectiveSessionClientType(session model.UserSession) string {

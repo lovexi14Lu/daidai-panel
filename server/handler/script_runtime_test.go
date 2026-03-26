@@ -70,3 +70,25 @@ func TestDetectMissingDep(t *testing.T) {
 		})
 	}
 }
+
+func TestDebugRunFinishDoesNotOverrideStoppedStatus(t *testing.T) {
+	exitCode := -1
+	run := &debugRun{
+		Logs:     []string{"before"},
+		Done:     true,
+		ExitCode: &exitCode,
+		Status:   "stopped",
+	}
+
+	run.finish(1, nil, 0.25)
+
+	if run.Status != "stopped" {
+		t.Fatalf("expected stopped status to be preserved, got %q", run.Status)
+	}
+	if !run.Done {
+		t.Fatal("expected done flag to stay true")
+	}
+	if got := len(run.Logs); got != 1 {
+		t.Fatalf("expected finish to avoid appending logs for stopped run, got %d entries", got)
+	}
+}

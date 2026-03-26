@@ -34,12 +34,16 @@ defineProps<{
           <div class="dd-mobile-card__title-wrap">
             <span class="dd-mobile-card__title">{{ row.ip }}</span>
             <span class="dd-mobile-card__subtitle">
-              {{ row.client_type_label || '网页端' }} · {{ new Date(row.last_active || row.created_at).toLocaleString() }}
+              {{ row.client_name || row.client_type_label || '网页端' }} · {{ new Date(row.last_active || row.created_at).toLocaleString() }}
             </span>
           </div>
         </div>
         <div class="dd-mobile-card__body">
           <div class="dd-mobile-card__grid">
+            <div class="dd-mobile-card__field dd-mobile-card__field--full">
+              <span class="dd-mobile-card__label">客户端</span>
+              <span class="dd-mobile-card__value">{{ row.client_name || row.client_type_label || '-' }}</span>
+            </div>
             <div class="dd-mobile-card__field dd-mobile-card__field--full">
               <span class="dd-mobile-card__label">用户代理</span>
               <span class="dd-mobile-card__value">{{ row.user_agent }}</span>
@@ -55,7 +59,9 @@ defineProps<{
 
     <el-table v-else :data="sessions" v-loading="sessionsLoading" stripe empty-text="暂无数据">
       <el-table-column prop="ip" label="IP地址" width="140" />
-      <el-table-column prop="client_type_label" label="客户端" width="110" />
+      <el-table-column prop="client_name" label="客户端" min-width="180" show-overflow-tooltip>
+        <template #default="{ row }">{{ row.client_name || row.client_type_label || '-' }}</template>
+      </el-table-column>
       <el-table-column prop="user_agent" label="用户代理" show-overflow-tooltip />
       <el-table-column label="最后活动" width="170">
         <template #default="{ row }">{{ new Date(row.last_active || row.created_at).toLocaleString() }}</template>

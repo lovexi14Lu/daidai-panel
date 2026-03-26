@@ -2,7 +2,7 @@ import { ref, type ComputedRef, type Ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { scriptApi } from '@/api/script'
-import type { ScriptVersionRecord } from './types'
+import type { ScriptVersionDetail, ScriptVersionRecord } from './types'
 
 interface ScriptWorkspaceActionsOptions {
   selectedFile: Ref<string>
@@ -34,6 +34,7 @@ export function useScriptWorkspaceActions({
   const showCreateDirDialog = ref(false)
   const showRenameDialog = ref(false)
   const showVersionDialog = ref(false)
+  const showVersionDiffDialog = ref(false)
   const showUploadDialog = ref(false)
 
   const uploadDir = ref('')
@@ -48,6 +49,11 @@ export function useScriptWorkspaceActions({
 
   const versions = ref<ScriptVersionRecord[]>([])
   const versionsLoading = ref(false)
+  const versionDiffLoading = ref(false)
+  const versionDiffOriginalTitle = ref('')
+  const versionDiffModifiedTitle = ref('')
+  const versionDiffOriginalContent = ref('')
+  const versionDiffModifiedContent = ref('')
 
   function isActionCancelled(err: unknown) {
     return err === 'cancel' || err === 'close' || String(err) === 'cancel' || String(err) === 'close'
@@ -253,6 +259,38 @@ export function useScriptWorkspaceActions({
     }
   }
 
+  function buildVersionLabel(version: ScriptVersionRecord) {
+    const message = version.message?.trim()
+    return message ? `V${version.version} · ${message}` : `V${version.version}`
+  }
+
+  async function handleCompareVersion(version: ScriptVersionRecord) {
+    if (!selectedFile.value) return
+
+    const currentContentSnapshot = fileContent.value
+    const currentFileName = getFileName(selectedFile.value)
+
+    versionDiffLoading.value = true
+    versionDiffOriginalTitle.value = buildVersionLabel(version)
+    versionDiffModifiedTitle.value = hasChanges.value
+      ? `${currentFileName} · 当前未保存代码`
+      : `${currentFileName} · 当前代码`
+    versionDiffOriginalContent.value = ''
+    versionDiffModifiedContent.value = currentContentSnapshot
+    showVersionDiffDialog.value = true
+
+    try {
+      const res = await scriptApi.getVersion(version.id)
+      const detail = res.data as ScriptVersionDetail | undefined
+      versionDiffOriginalContent.value = detail?.content || ''
+    } catch (err: any) {
+      showVersionDiffDialog.value = false
+      ElMessage.error(err?.response?.data?.error || err?.message || '加载版本对比失败')
+    } finally {
+      versionDiffLoading.value = false
+    }
+  }
+
   async function handleFormat() {
     if (!selectedFile.value || isBinary.value) return
     const langMap: Record<string, string> = {
@@ -312,6 +350,7 @@ export function useScriptWorkspaceActions({
     showCreateDirDialog,
     showRenameDialog,
     showVersionDialog,
+    showVersionDiffDialog,
     showUploadDialog,
     uploadDir,
     newFileName,
@@ -321,6 +360,11 @@ export function useScriptWorkspaceActions({
     renameTarget,
     versions,
     versionsLoading,
+    versionDiffLoading,
+    versionDiffOriginalTitle,
+    versionDiffModifiedTitle,
+    versionDiffOriginalContent,
+    versionDiffModifiedContent,
     handleSave,
     handleCreateFile,
     handleCreateDir,
@@ -333,6 +377,7 @@ export function useScriptWorkspaceActions({
     handleAddToTask,
     loadVersions,
     handleRollback,
+    handleCompareVersion,
     handleFormat,
     handleDownload,
     handleKeyDown

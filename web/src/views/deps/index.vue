@@ -19,8 +19,14 @@
         <el-button @click="loadData" :loading="loading">
           <el-icon><Refresh /></el-icon>刷新
         </el-button>
+        <el-button type="warning" plain @click="handleBatchReinstall" :disabled="batchReinstallIds.length === 0">
+          <el-icon><RefreshRight /></el-icon>批量重装
+        </el-button>
         <el-button type="danger" plain @click="handleBatchDelete" :disabled="selectedIds.length === 0">
           <el-icon><Delete /></el-icon>批量卸载
+        </el-button>
+        <el-button @click="handleExport" :loading="exporting">
+          <el-icon><Download /></el-icon>导出清单
         </el-button>
         <el-button @click="openMirrorDialog">
           <el-icon><Setting /></el-icon>镜像源设置
@@ -87,7 +93,7 @@
               type="warning"
               plain
               @click="handleReinstall(row)"
-              :disabled="row.status === 'installing' || row.status === 'removing'"
+              :disabled="isProcessing(row.status)"
             >
               重装
             </el-button>
@@ -96,7 +102,7 @@
               type="danger"
               plain
               @click="handleDelete(row)"
-              :disabled="row.status === 'installing' || row.status === 'removing'"
+              :disabled="isProcessing(row.status)"
             >
               卸载
             </el-button>
@@ -104,7 +110,7 @@
               size="small"
               type="danger"
               @click="handleForceDelete(row)"
-              :disabled="row.status === 'installing' || row.status === 'removing'"
+              :disabled="isProcessing(row.status)"
             >
               强制卸载
             </el-button>
@@ -133,9 +139,9 @@
         <template #default="{ row }">
           <el-button type="primary" link size="small" @click="viewLog(row)">日志</el-button>
           <el-button v-if="row.status === 'installing' || row.status === 'removing'" type="warning" link size="small" @click="handleCancel(row)">取消</el-button>
-          <el-button type="warning" link size="small" @click="handleReinstall(row)" :disabled="row.status === 'installing' || row.status === 'removing'">重装</el-button>
-          <el-button type="danger" link size="small" @click="handleDelete(row)" :disabled="row.status === 'installing' || row.status === 'removing'">卸载</el-button>
-          <el-button type="danger" link size="small" @click="handleForceDelete(row)" :disabled="row.status === 'installing' || row.status === 'removing'">强制卸载</el-button>
+          <el-button type="warning" link size="small" @click="handleReinstall(row)" :disabled="isProcessing(row.status)">重装</el-button>
+          <el-button type="danger" link size="small" @click="handleDelete(row)" :disabled="isProcessing(row.status)">卸载</el-button>
+          <el-button type="danger" link size="small" @click="handleForceDelete(row)" :disabled="isProcessing(row.status)">强制卸载</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -286,8 +292,12 @@ const createType = ref('nodejs')
 const createNames = ref('')
 const autoSplit = ref(true)
 const creating = ref(false)
+const exporting = ref(false)
 const selectedIds = ref<number[]>([])
 const selectedIdSet = computed(() => new Set(selectedIds.value))
+const selectedRows = computed(() => depsList.value.filter(dep => selectedIdSet.value.has(dep.id)))
+const batchReinstallRows = computed(() => selectedRows.value.filter(dep => !isProcessing(dep.status)))
+const batchReinstallIds = computed(() => batchReinstallRows.value.map(dep => dep.id))
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 const { isMobile, dialogFullscreen } = useResponsive()
 
@@ -312,6 +322,7 @@ const linuxCount = ref(0)
 
 function statusType(status: string) {
   switch (status) {
+    case 'queued': return 'warning'
     case 'installed': return 'success'
     case 'installing': return 'warning'
     case 'removing': return 'warning'
@@ -323,6 +334,7 @@ function statusType(status: string) {
 
 function statusLabel(status: string) {
   switch (status) {
+    case 'queued': return '排队中'
     case 'installed': return '已安装'
     case 'installing': return '安装中'
     case 'removing': return '卸载中'
@@ -330,6 +342,10 @@ function statusLabel(status: string) {
     case 'failed': return '失败'
     default: return status
   }
+}
+
+function isProcessing(status: string) {
+  return status === 'queued' || status === 'installing' || status === 'removing'
 }
 
 const linuxMirrorLabel = computed(() => mirrorMeta.value.linux_mirror_label || 'Linux')
@@ -375,6 +391,7 @@ async function loadData() {
   try {
     const res = await depsApi.list(activeTab.value)
     depsList.value = res.data || []
+    selectedIds.value = selectedIds.value.filter(id => depsList.value.some(dep => dep.id === id))
     const countMap: Record<string, (v: number) => void> = {
       nodejs: (v) => nodejsCount.value = v,
       python: (v) => pythonCount.value = v,
@@ -390,7 +407,7 @@ async function loadData() {
 }
 
 function checkPending() {
-  const hasPending = depsList.value.some(d => d.status === 'installing' || d.status === 'removing')
+  const hasPending = depsList.value.some(d => isProcessing(d.status))
   if (hasPending && !refreshTimer) {
     refreshTimer = setInterval(loadData, 3000)
   } else if (!hasPending && refreshTimer) {
@@ -452,6 +469,28 @@ async function handleBatchDelete() {
   }
 }
 
+async function handleBatchReinstall() {
+  if (selectedIds.value.length === 0) return
+  if (batchReinstallIds.value.length === 0) {
+    ElMessage.warning('选中的依赖当前都在处理中，暂时无法重装')
+    return
+  }
+
+  const skippedCount = selectedIds.value.length - batchReinstallIds.value.length
+  const skipHint = skippedCount > 0 ? `\n其中 ${skippedCount} 个依赖正在处理中，已自动跳过。` : ''
+
+  try {
+    await ElMessageBox.confirm(`确定顺序重装选中的 ${batchReinstallIds.value.length} 个依赖吗？${skipHint}`, '批量重装', { type: 'warning' })
+    await depsApi.batchReinstall(batchReinstallIds.value)
+    ElMessage.success(`已提交 ${batchReinstallIds.value.length} 个依赖顺序重装`)
+    loadData()
+  } catch (err: any) {
+    if (err !== 'cancel' && err?.toString() !== 'cancel') {
+      ElMessage.error(err?.response?.data?.error || '批量重装失败')
+    }
+  }
+}
+
 async function handleDelete(row: any) {
   try {
     await ElMessageBox.confirm(`确认卸载 ${row.name}？`, '提示', { type: 'warning' })
@@ -473,6 +512,27 @@ async function handleForceDelete(row: any) {
 async function handleReinstall(row: any) {
   try { await depsApi.reinstall(row.id); ElMessage.success('重新安装中'); loadData() }
   catch { ElMessage.error('操作失败') }
+}
+
+async function handleExport() {
+  exporting.value = true
+  try {
+    const blob = await depsApi.exportList(activeTab.value)
+    const url = window.URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    const timestamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')
+    anchor.href = url
+    anchor.download = `dependencies-${activeTab.value}-${timestamp}.txt`
+    document.body.appendChild(anchor)
+    anchor.click()
+    document.body.removeChild(anchor)
+    window.URL.revokeObjectURL(url)
+    ElMessage.success('依赖清单已导出')
+  } catch {
+    ElMessage.error('导出失败')
+  } finally {
+    exporting.value = false
+  }
 }
 
 async function handleCancel(row: any) {

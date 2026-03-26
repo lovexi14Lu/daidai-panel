@@ -28,12 +28,20 @@ export const depsApi = {
     return request.post('/deps/batch-delete', { ids }) as Promise<{ message: string }>
   },
 
+  batchReinstall(ids: number[]) {
+    return request.post('/deps/batch-reinstall', { ids }) as Promise<{ message: string }>
+  },
+
   getStatus(id: number) {
     return request.get(`/deps/${id}/status`) as Promise<{ data: any }>
   },
 
   reinstall(id: number) {
     return request.put(`/deps/${id}/reinstall`) as Promise<{ message: string }>
+  },
+
+  exportList(type: string) {
+    return request.get('/deps/export', { params: { type }, responseType: 'blob' }) as Promise<Blob>
   },
 
   cancel(id: number) {

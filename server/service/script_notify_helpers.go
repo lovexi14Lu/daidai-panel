@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -248,16 +249,44 @@ var managedSendNotifyJSContent = strings.Join([]string{
 	" * - Extra params are merged into context for content_template variables.",
 	" * - params.ignore_default_config = true skips DAIDAI_NOTIFY_CHANNEL_ID.",
 	" */",
+	"const fs = require('node:fs');",
 	"const http = require('node:http');",
 	"const https = require('node:https');",
+	"const path = require('node:path');",
+	"const Module = require('node:module');",
 	"const { URL } = require('node:url');",
 	"",
 	"const DEFAULT_TIMEOUT_MS = 15000;",
 	"const RESERVED_PARAM_KEYS = new Set(['channel_id', 'channel_ids', 'context', 'ignore_default_config', 'url', 'token', 'timeout']);",
+	"const SCRIPTS_DIR = String(process.env.DAIDAI_SCRIPTS_DIR || __dirname).trim() || __dirname;",
+	"const MANAGED_HELPER_PATH = path.join(SCRIPTS_DIR, 'sendNotify.js');",
 	"",
 	"function isPlainObject(value) {",
 	"  return value != null && typeof value === 'object' && !Array.isArray(value);",
 	"}",
+	"",
+	"function installManagedSendNotifyAlias() {",
+	"  if (global.__DAIDAI_SEND_NOTIFY_ALIAS_PATCHED__) {",
+	"    return;",
+	"  }",
+	"  const originalResolveFilename = Module._resolveFilename;",
+	"  Module._resolveFilename = function patchedResolveFilename(request, parent, isMain, options) {",
+	"    if (request === 'sendNotify' || request === 'sendNotify.js' || request === './sendNotify' || request === './sendNotify.js') {",
+	"      if (typeof request === 'string' && request.startsWith('.') && parent && parent.filename) {",
+	"        const localCandidate = path.resolve(path.dirname(parent.filename), request);",
+	"        const localJS = localCandidate.endsWith('.js') ? localCandidate : `${localCandidate}.js`;",
+	"        if (fs.existsSync(localCandidate) || fs.existsSync(localJS)) {",
+	"          return originalResolveFilename.call(this, request, parent, isMain, options);",
+	"        }",
+	"      }",
+	"      return MANAGED_HELPER_PATH;",
+	"    }",
+	"    return originalResolveFilename.call(this, request, parent, isMain, options);",
+	"  };",
+	"  global.__DAIDAI_SEND_NOTIFY_ALIAS_PATCHED__ = true;",
+	"}",
+	"",
+	"installManagedSendNotifyAlias();",
 	"",
 	"/**",
 	" * Normalize timeout values from env or params into milliseconds.",
@@ -459,6 +488,60 @@ func EnsureBuiltinNotifyHelpers(dirs ...string) error {
 	return nil
 }
 
+func cleanupManagedHelperCopies(scriptsDir, workDir string) error {
+	scriptsDir = strings.TrimSpace(scriptsDir)
+	workDir = strings.TrimSpace(workDir)
+	if scriptsDir == "" || workDir == "" {
+		return nil
+	}
+
+	scriptsClean := filepath.Clean(scriptsDir)
+	workClean := filepath.Clean(workDir)
+	if strings.EqualFold(scriptsClean, workClean) {
+		return nil
+	}
+
+	for _, artifact := range managedNotifyArtifacts {
+		path := filepath.Join(workClean, artifact.filename)
+		content, err := os.ReadFile(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(string(content), managedNotifyHelperToken) {
+			continue
+		}
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func CleanupManagedHelperCopiesUnderRoot(scriptsDir string) error {
+	scriptsDir = strings.TrimSpace(scriptsDir)
+	if scriptsDir == "" {
+		return nil
+	}
+
+	root := filepath.Clean(scriptsDir)
+	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			return nil
+		}
+		if strings.EqualFold(filepath.Clean(path), root) {
+			return nil
+		}
+		return cleanupManagedHelperCopies(root, path)
+	})
+}
+
 func ensureManagedHelperFile(path, content string) error {
 	existing, err := os.ReadFile(path)
 	if err == nil {
@@ -480,7 +563,10 @@ func BuildNotifyHelperEnv(scriptsDir string, workDir string, serverPort int, def
 	if ttl <= 0 {
 		ttl = 2 * time.Hour
 	}
-	if err := EnsureBuiltinNotifyHelpers(scriptsDir, workDir); err != nil {
+	if err := EnsureBuiltinNotifyHelpers(scriptsDir); err != nil {
+		return nil, err
+	}
+	if err := cleanupManagedHelperCopies(scriptsDir, workDir); err != nil {
 		return nil, err
 	}
 
@@ -511,6 +597,7 @@ func AppendScriptHelperPaths(envMap map[string]string, scriptsDir string) {
 
 	appendEnvPathValue(envMap, "NODE_PATH", scriptsDir)
 	appendEnvPathValue(envMap, "PYTHONPATH", scriptsDir)
+	appendNodeRequireOption(envMap, filepath.Join(scriptsDir, sendNotifyJSFilename))
 }
 
 func appendEnvPathValue(envMap map[string]string, key, value string) {
@@ -531,4 +618,24 @@ func appendEnvPathValue(envMap map[string]string, key, value string) {
 	}
 
 	envMap[key] = existing + string(os.PathListSeparator) + value
+}
+
+func appendNodeRequireOption(envMap map[string]string, helperPath string) {
+	helperPath = strings.TrimSpace(helperPath)
+	if helperPath == "" {
+		return
+	}
+	helperPath = filepath.ToSlash(helperPath)
+
+	existing := strings.TrimSpace(envMap["NODE_OPTIONS"])
+	if strings.Contains(existing, helperPath) {
+		return
+	}
+
+	option := `--require="` + strings.ReplaceAll(helperPath, `"`, `\"`) + `"`
+	if existing == "" {
+		envMap["NODE_OPTIONS"] = option
+		return
+	}
+	envMap["NODE_OPTIONS"] = existing + " " + option
 }

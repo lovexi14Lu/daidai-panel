@@ -8,7 +8,6 @@ import (
 
 	"daidai-panel/model"
 	"daidai-panel/pkg/response"
-	"daidai-panel/service"
 
 	"github.com/gin-gonic/gin"
 )
@@ -56,23 +55,31 @@ func (h *ScriptHandler) DebugRun(c *gin.Context) {
 		elapsed := time.Since(startTime).Seconds()
 		exitCode := resolveExitCode(waitErr)
 
+		if run.isStopped() {
+			return
+		}
+
 		if exitCode != 0 && model.GetRegisteredConfigBool("auto_install_deps") {
 			candidate := detectAutoInstallCandidate(ext, run.logOutput(), workDir)
 			if candidate != nil {
 				run.appendLog(fmt.Sprintf("[检测到缺失依赖: %s，正在自动安装...]", candidate.DisplayName))
 
 				installResult := installDepForDebug(candidate, envMap)
+				if run.isStopped() {
+					return
+				}
 				if installResult.Success {
 					run.appendLog(fmt.Sprintf("[安装成功: %s，自动重试执行]", candidate.DisplayName))
 
 					retryCmd := newScriptCommand(cmdParts, workDir, env)
-					service.SetPgid(retryCmd)
-
 					retryPipeWriter, retryScanDone, startErr := startTrackedCommand(retryCmd, run)
 					if startErr == nil {
 						waitErr = waitTrackedCommand(retryCmd, retryPipeWriter, retryScanDone)
 						elapsed = time.Since(startTime).Seconds()
 						exitCode = resolveExitCode(waitErr)
+						if run.isStopped() {
+							return
+						}
 					} else {
 						run.appendLog(fmt.Sprintf("[重试启动失败: %s]", startErr))
 					}

@@ -37,6 +37,7 @@ const (
 	DepTypeNodeJS       = "nodejs"
 	DepTypePython       = "python"
 	DepTypeLinux        = "linux"
+	DepStatusQueued     = "queued"
 	DepStatusInstalling = "installing"
 	DepStatusInstalled  = "installed"
 	DepStatusFailed     = "failed"

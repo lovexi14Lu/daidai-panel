@@ -1,5 +1,21 @@
 import request from './request'
 
+function buildKeepaliveAuthHeaders() {
+  const headers: Record<string, string> = {
+    'X-Client-Type': 'web',
+    'X-Client-App': 'daidai-panel-web'
+  }
+
+  if (typeof window !== 'undefined') {
+    const accessToken = window.localStorage.getItem('access_token')
+    if (accessToken) {
+      headers.Authorization = `Bearer ${accessToken}`
+    }
+  }
+
+  return headers
+}
+
 export const scriptApi = {
   list(params?: { keyword?: string }) {
     return request.get('/scripts', { params }) as Promise<{ data: any[] }>
@@ -73,6 +89,24 @@ export const scriptApi = {
 
   debugStop(runId: string) {
     return request.put(`/scripts/run/${runId}/stop`) as Promise<{ message: string }>
+  },
+
+  debugStopKeepalive(runId: string) {
+    if (typeof window === 'undefined' || !runId) {
+      return false
+    }
+
+    try {
+      void fetch(`/api/scripts/run/${encodeURIComponent(runId)}/stop`, {
+        method: 'PUT',
+        keepalive: true,
+        credentials: 'same-origin',
+        headers: buildKeepaliveAuthHeaders(),
+      })
+      return true
+    } catch {
+      return false
+    }
   },
 
   debugClear(runId: string) {

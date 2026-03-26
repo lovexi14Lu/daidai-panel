@@ -391,6 +391,26 @@ func TestLoginReplacesOnlySameClientTypeSessions(t *testing.T) {
 		}
 	}
 
+	assertClientNameContains := func(clientType, expected string) {
+		var sessions []model.UserSession
+		if err := database.DB.Where("user_id = ?", user.ID).Order("id ASC").Find(&sessions).Error; err != nil {
+			t.Fatalf("query sessions for client name: %v", err)
+		}
+
+		for _, session := range sessions {
+			gotType := service.DetectSessionClientType(session.ClientType, "", session.UserAgent)
+			if gotType != clientType {
+				continue
+			}
+			if !strings.Contains(session.ClientName, expected) {
+				t.Fatalf("expected %s client name to contain %q, got %q", clientType, expected, session.ClientName)
+			}
+			return
+		}
+
+		t.Fatalf("expected to find %s session", clientType)
+	}
+
 	webTokenA := login("198.51.100.10", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", map[string]string{
 		"X-Client-Type": "web",
 		"X-Client-App":  "daidai-panel-web",
@@ -400,11 +420,19 @@ func TestLoginReplacesOnlySameClientTypeSessions(t *testing.T) {
 	})
 	assertProtectedStatus(webTokenA, http.StatusOK, "web token A should be valid after first login")
 
-	appTokenA := login("198.51.100.20", "Dart/3.11 (dart:io)", nil)
+	appTokenA := login("198.51.100.20", "Dart/3.11 (dart:io)", map[string]string{
+		"X-Client-Type":     "app",
+		"X-Client-App":      "daidai-panel-app",
+		"X-Client-Platform": "android",
+		"X-Device-Model":    "Xiaomi 15 Pro",
+		"X-Device-Name":     "umi",
+		"X-OS-Version":      "15",
+	})
 	assertSessions(map[string]string{
 		service.SessionClientWeb: "198.51.100.10",
 		service.SessionClientApp: "198.51.100.20",
 	})
+	assertClientNameContains(service.SessionClientApp, "Xiaomi 15 Pro")
 	assertProtectedStatus(webTokenA, http.StatusOK, "web token A should remain valid after app login")
 	assertProtectedStatus(appTokenA, http.StatusOK, "app token A should be valid after first app login")
 
@@ -420,14 +448,20 @@ func TestLoginReplacesOnlySameClientTypeSessions(t *testing.T) {
 	assertProtectedStatus(appTokenA, http.StatusOK, "app token A should remain valid after second web login")
 	assertProtectedStatus(webTokenB, http.StatusOK, "web token B should be valid after second web login")
 
-	appTokenB := login("198.51.100.40", "DaidaiPanelApp/1.0.1+2 (Android; Flutter)", map[string]string{
-		"X-Client-Type": "app",
-		"X-Client-App":  "daidai-panel-app",
+	appTokenB := login("198.51.100.40", "DaidaiPanelApp/1.0.2+3 (Android; Flutter)", map[string]string{
+		"X-Client-Type":     "app",
+		"X-Client-App":      "daidai-panel-app",
+		"X-Client-Platform": "ios",
+		"X-Device-Model":    "iPhone16,2",
+		"X-Device-Name":     "iPhone",
+		"X-OS-Version":      "18.3",
 	})
 	assertSessions(map[string]string{
 		service.SessionClientWeb: "198.51.100.30",
 		service.SessionClientApp: "198.51.100.40",
 	})
+	assertClientNameContains(service.SessionClientWeb, "macOS")
+	assertClientNameContains(service.SessionClientApp, "iPhone16,2")
 	assertProtectedStatus(webTokenB, http.StatusOK, "web token B should remain valid after second app login")
 	assertProtectedStatus(appTokenA, http.StatusUnauthorized, "app token A should be revoked by second app login")
 	assertProtectedStatus(appTokenB, http.StatusOK, "app token B should be valid after second app login")

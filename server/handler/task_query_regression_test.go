@@ -191,9 +191,19 @@ func TestTaskListMapsSubscriptionLabelsToSubscriptionNames(t *testing.T) {
 		t.Fatalf("expected non-empty data array, got %#v", payload["data"])
 	}
 
-	firstItem, ok := items[0].(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected task object, got %#v", items[0])
+	var firstItem map[string]interface{}
+	for _, rawItem := range items {
+		taskItem, ok := rawItem.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if name, ok := taskItem["name"].(string); ok && name == task.Name {
+			firstItem = taskItem
+			break
+		}
+	}
+	if firstItem == nil {
+		t.Fatalf("expected to find task %q in payload, got %#v", task.Name, items)
 	}
 
 	displayLabels, ok := firstItem["display_labels"].([]interface{})

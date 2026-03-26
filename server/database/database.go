@@ -158,12 +158,14 @@ func EnsureColumns() {
 
 	ensureTableColumns("login_logs", []columnDef{
 		{"method", "VARCHAR(32) DEFAULT '密码登录'"},
+		{"client_name", "VARCHAR(255) DEFAULT ''"},
 	})
 
 	ensureTableColumns("user_sessions", []columnDef{
 		{"refresh_jti", "VARCHAR(36)"},
 		{"refresh_expires_at", "DATETIME"},
 		{"client_type", "VARCHAR(16) DEFAULT 'web'"},
+		{"client_name", "VARCHAR(255) DEFAULT ''"},
 	})
 
 	log.Printf("column check completed")

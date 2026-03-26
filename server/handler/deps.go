@@ -32,6 +32,9 @@ var (
 	depLogStreamsMu sync.RWMutex
 	depOperations   = make(map[uint]context.CancelFunc)
 	depOpsMu        sync.Mutex
+
+	dependencyInstallRunner  = installDependency
+	dependencyExportTextFunc = buildDependencyExportText
 )
 
 const dependencyOperationTimeout = 20 * time.Minute
@@ -190,7 +193,7 @@ func (h *DepsHandler) Create(c *gin.Context) {
 		}
 		created = append(created, dep.ToDict())
 
-		go installDependency(dep.ID, req.Type, name)
+		go dependencyInstallRunner(dep.ID, req.Type, name)
 	}
 
 	response.Created(c, gin.H{
@@ -208,7 +211,7 @@ func (h *DepsHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	if dep.Status == model.DepStatusInstalling || dep.Status == model.DepStatusRemoving {
+	if dep.Status == model.DepStatusQueued || dep.Status == model.DepStatusInstalling || dep.Status == model.DepStatusRemoving {
 		response.BadRequest(c, "依赖正在处理中")
 		return
 	}
@@ -237,7 +240,7 @@ func (h *DepsHandler) BatchDelete(c *gin.Context) {
 	}
 
 	var deps []model.Dependency
-	database.DB.Where("id IN ? AND status NOT IN ?", req.IDs, []string{model.DepStatusInstalling, model.DepStatusRemoving}).Find(&deps)
+	database.DB.Where("id IN ? AND status NOT IN ?", req.IDs, []string{model.DepStatusQueued, model.DepStatusInstalling, model.DepStatusRemoving}).Find(&deps)
 
 	for _, dep := range deps {
 		database.DB.Delete(&dep)
@@ -338,7 +341,7 @@ func (h *DepsHandler) Reinstall(c *gin.Context) {
 		return
 	}
 
-	if dep.Status == model.DepStatusInstalling || dep.Status == model.DepStatusRemoving {
+	if dep.Status == model.DepStatusQueued || dep.Status == model.DepStatusInstalling || dep.Status == model.DepStatusRemoving {
 		response.BadRequest(c, "依赖正在处理中")
 		return
 	}
@@ -348,9 +351,84 @@ func (h *DepsHandler) Reinstall(c *gin.Context) {
 		"log":    "",
 	})
 
-	go installDependency(dep.ID, dep.Type, dep.Name)
+	go dependencyInstallRunner(dep.ID, dep.Type, dep.Name)
 
 	response.Success(c, gin.H{"message": "重新安装中"})
+}
+
+func appendDepsLog(existing, line string) string {
+	existing = strings.TrimRight(existing, "\n")
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return existing
+	}
+	if existing == "" {
+		return line
+	}
+	if strings.Contains(existing, line) {
+		return existing
+	}
+	return existing + "\n" + line
+}
+
+func (h *DepsHandler) BatchReinstall(c *gin.Context) {
+	var req struct {
+		IDs []uint `json:"ids" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || len(req.IDs) == 0 {
+		response.BadRequest(c, "请求参数错误")
+		return
+	}
+
+	var deps []model.Dependency
+	database.DB.Where("id IN ? AND status NOT IN ?", req.IDs, []string{model.DepStatusQueued, model.DepStatusInstalling, model.DepStatusRemoving}).Find(&deps)
+	if len(deps) == 0 {
+		response.BadRequest(c, "选中的依赖当前无法重装")
+		return
+	}
+
+	depMap := make(map[uint]model.Dependency, len(deps))
+	for _, dep := range deps {
+		depMap[dep.ID] = dep
+	}
+
+	queue := make([]model.Dependency, 0, len(req.IDs))
+	for _, id := range req.IDs {
+		dep, ok := depMap[id]
+		if !ok {
+			continue
+		}
+		queue = append(queue, dep)
+	}
+	if len(queue) == 0 {
+		response.BadRequest(c, "选中的依赖当前无法重装")
+		return
+	}
+
+	for index, dep := range queue {
+		database.DB.Model(&model.Dependency{}).Where("id = ?", dep.ID).Updates(map[string]interface{}{
+			"status": model.DepStatusQueued,
+			"log":    appendDepsLog(dep.Log, fmt.Sprintf("[批量重装] 已加入顺序队列（%d/%d）", index+1, len(queue))),
+		})
+	}
+
+	go func(ordered []model.Dependency) {
+		for index, dep := range ordered {
+			var current model.Dependency
+			if err := database.DB.First(&current, dep.ID).Error; err != nil {
+				continue
+			}
+
+			database.DB.Model(&model.Dependency{}).Where("id = ?", dep.ID).Updates(map[string]interface{}{
+				"status": model.DepStatusInstalling,
+				"log":    appendDepsLog(current.Log, fmt.Sprintf("[批量重装] 开始执行（%d/%d）", index+1, len(ordered))),
+			})
+
+			dependencyInstallRunner(dep.ID, dep.Type, dep.Name)
+		}
+	}(queue)
+
+	response.Success(c, gin.H{"message": fmt.Sprintf("已提交 %d 个依赖顺序重装", len(queue))})
 }
 
 func (h *DepsHandler) Cancel(c *gin.Context) {
@@ -385,6 +463,34 @@ func (h *DepsHandler) PipList(c *gin.Context) {
 		}
 	}
 	c.Data(200, "application/json", out)
+}
+
+func (h *DepsHandler) Export(c *gin.Context) {
+	depType := c.DefaultQuery("type", model.DepTypeNodeJS)
+
+	validTypes := map[string]bool{
+		model.DepTypeNodeJS: true,
+		model.DepTypePython: true,
+		model.DepTypeLinux:  true,
+	}
+	if !validTypes[depType] {
+		response.BadRequest(c, "无效的依赖类型")
+		return
+	}
+
+	var deps []model.Dependency
+	database.DB.Where("type = ? AND status = ?", depType, model.DepStatusInstalled).Order("name ASC").Find(&deps)
+
+	text, err := dependencyExportTextFunc(depType, deps)
+	if err != nil {
+		response.InternalError(c, "导出依赖清单失败: "+err.Error())
+		return
+	}
+
+	filename := fmt.Sprintf("dependencies-%s-%s.txt", depType, time.Now().Format("20060102-150405"))
+	c.Header("Content-Type", "text/plain; charset=utf-8")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+	c.String(200, text)
 }
 
 func (h *DepsHandler) NpmList(c *gin.Context) {
@@ -739,12 +845,14 @@ func (h *DepsHandler) RegisterRoutes(r *gin.RouterGroup) {
 	{
 		deps.GET("", h.List)
 		deps.POST("", h.Create)
+		deps.POST("/batch-reinstall", h.BatchReinstall)
 		deps.POST("/batch-delete", h.BatchDelete)
 		deps.DELETE("/:id", h.Delete)
 		deps.PUT("/:id/cancel", h.Cancel)
 		deps.GET("/:id/status", h.GetStatus)
 		deps.GET("/:id/log-stream", h.LogStream)
 		deps.PUT("/:id/reinstall", h.Reinstall)
+		deps.GET("/export", h.Export)
 
 		deps.GET("/pip", h.PipList)
 		deps.GET("/npm", h.NpmList)

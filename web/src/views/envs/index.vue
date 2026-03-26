@@ -836,7 +836,7 @@ function formatDateTime(t: string | null) {
           <el-icon class="drag-handle"><Rank /></el-icon>
         </template>
       </el-table-column>
-      <el-table-column prop="name" label="变量名" min-width="220">
+      <el-table-column prop="name" label="变量名" min-width="188">
         <template #header>
           <div class="table-header-label is-primary">
             <span>变量名</span>
@@ -853,7 +853,7 @@ function formatDateTime(t: string | null) {
           </div>
         </template>
       </el-table-column>
-      <el-table-column prop="value" label="值" min-width="340">
+      <el-table-column prop="value" label="值" min-width="280">
         <template #header>
           <div class="table-header-label is-primary">
             <span>值</span>
@@ -864,7 +864,7 @@ function formatDateTime(t: string | null) {
           <span class="env-value-text" :title="row.value || ''">{{ row.value || '-' }}</span>
         </template>
       </el-table-column>
-      <el-table-column prop="remarks" label="备注" min-width="220">
+      <el-table-column prop="remarks" label="备注" min-width="180">
         <template #header>
           <div class="table-header-label">
             <span>备注</span>
@@ -875,7 +875,7 @@ function formatDateTime(t: string | null) {
           <span class="env-remarks-text" :title="row.remarks || ''">{{ row.remarks || '-' }}</span>
         </template>
       </el-table-column>
-      <el-table-column prop="group" label="分组" width="138" align="center">
+      <el-table-column prop="group" label="分组" width="120" align="center">
         <template #header>
           <div class="table-header-label is-aux">
             <span>分组</span>
@@ -910,7 +910,7 @@ function formatDateTime(t: string | null) {
           </div>
         </template>
       </el-table-column>
-      <el-table-column label="更新时间" width="182" align="center">
+      <el-table-column label="更新时间" width="168" align="center">
         <template #header>
           <div class="table-header-label is-aux">
             <span>更新时间</span>
@@ -921,7 +921,7 @@ function formatDateTime(t: string | null) {
           <span class="time-text">{{ formatDateTime(row.updated_at) }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="148" fixed="right" align="center">
+      <el-table-column label="操作" width="136" align="center">
         <template #default="{ row }">
           <div class="action-group">
             <el-tooltip content="编辑" placement="top">
@@ -1048,10 +1048,10 @@ function formatDateTime(t: string | null) {
 
 .page-header {
   display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
+  justify-content: flex-start;
+  align-items: stretch;
+  flex-direction: column;
   margin-bottom: 16px;
-  flex-wrap: wrap;
   gap: 12px;
 
   .header-left {
@@ -1059,14 +1059,17 @@ function formatDateTime(t: string | null) {
     align-items: center;
     gap: 12px;
     flex-wrap: wrap;
+    min-width: 0;
   }
 
   .header-right {
     display: flex;
-    align-items: center;
-    gap: 8px;
+    align-items: flex-start;
+    align-content: flex-start;
+    gap: 10px 12px;
     flex-wrap: wrap;
-    justify-content: flex-end;
+    justify-content: flex-start;
+    min-width: 0;
   }
 }
 
@@ -1075,6 +1078,7 @@ function formatDateTime(t: string | null) {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  min-width: 0;
 
   > * {
     min-width: 0;
@@ -1092,6 +1096,7 @@ function formatDateTime(t: string | null) {
   padding: 6px 10px;
   border-radius: 12px;
   background: color-mix(in srgb, var(--el-fill-color-light) 88%, white);
+  align-self: flex-start;
 }
 
 .density-label {

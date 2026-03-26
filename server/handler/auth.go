@@ -71,15 +71,21 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 	ip := middleware.ResolveClientIP(c)
 	ua := c.GetHeader("User-Agent")
-	clientType := service.DetectSessionClientType(
+	clientInfo := service.DetectSessionClientInfo(
 		c.GetHeader("X-Client-Type"),
 		c.GetHeader("X-Client-App"),
+		c.GetHeader("X-Client-Platform"),
+		c.GetHeader("X-Device-Model"),
+		c.GetHeader("X-Device-Name"),
+		c.GetHeader("X-OS-Version"),
 		ua,
 	)
+	clientType := clientInfo.Type
+	clientName := service.SessionClientDisplayName(clientInfo)
 
 	locked, remaining := service.CheckLoginLock(ip, req.Username)
 	if locked {
-		service.RecordLoginLog(0, req.Username, ip, ua, 1, "账号已锁定")
+		service.RecordLoginLog(0, req.Username, ip, clientName, ua, 1, "账号已锁定")
 		remainSec := int(remaining.Seconds())
 		c.JSON(429, gin.H{
 			"error":             fmt.Sprintf("账号已锁定，请 %.0f 分钟后重试", remaining.Minutes()),
@@ -90,7 +96,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 
 	if !service.IsIPWhitelisted(ip) {
-		service.RecordLoginLog(0, req.Username, ip, ua, 1, "IP 不在白名单")
+		service.RecordLoginLog(0, req.Username, ip, clientName, ua, 1, "IP 不在白名单")
 		response.Forbidden(c, "当前 IP 不在登录白名单中")
 		return
 	}
@@ -146,7 +152,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		switch err {
 		case service.ErrUserNotFound, service.ErrInvalidPassword:
 			failedAttempts := service.RecordFailedLogin(ip, req.Username)
-			service.RecordLoginLog(0, req.Username, ip, ua, 1, "登录失败")
+			service.RecordLoginLog(0, req.Username, ip, clientName, ua, 1, "登录失败")
 			c.JSON(401, gin.H{
 				"error":                  "用户名或密码错误",
 				"failed_attempts":        failedAttempts,
@@ -156,30 +162,30 @@ func (h *AuthHandler) Login(c *gin.Context) {
 				"require_after_failures": captchaCfg.RequireAfterFailures,
 			})
 		case service.ErrUserDisabled:
-			service.RecordLoginLog(0, req.Username, ip, ua, 1, "登录失败")
+			service.RecordLoginLog(0, req.Username, ip, clientName, ua, 1, "登录失败")
 			response.Forbidden(c, "账号已被禁用")
 		case service.ErrTOTPRequired:
-			service.RecordLoginLog(0, req.Username, ip, ua, 1, "登录失败")
+			service.RecordLoginLog(0, req.Username, ip, clientName, ua, 1, "登录失败")
 			c.JSON(401, gin.H{
 				"error":               "请输入两步验证码",
 				"two_factor_required": true,
 			})
 		case service.ErrInvalidTOTP:
-			service.RecordLoginLog(0, req.Username, ip, ua, 1, "登录失败")
+			service.RecordLoginLog(0, req.Username, ip, clientName, ua, 1, "登录失败")
 			c.JSON(401, gin.H{
 				"error":               "两步验证码错误",
 				"two_factor_required": true,
 			})
 		default:
 			service.RecordFailedLogin(ip, req.Username)
-			service.RecordLoginLog(0, req.Username, ip, ua, 1, "登录失败")
+			service.RecordLoginLog(0, req.Username, ip, clientName, ua, 1, "登录失败")
 			response.InternalError(c, "登录失败")
 		}
 		return
 	}
 
 	service.ClearLoginAttempts(ip, req.Username)
-	service.RecordLoginLog(user.ID, user.Username, ip, ua, 0, "登录成功")
+	service.RecordLoginLog(user.ID, user.Username, ip, clientName, ua, 0, "登录成功")
 	if model.GetRegisteredConfigBool("notify_on_login") {
 		go service.SendNotification(
 			"登录成功通知",
@@ -187,7 +193,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 				user.Username, time.Now().Format("2006-01-02 15:04:05"), ip),
 		)
 	}
-	service.CreateSessionWithRefresh(user.ID, user.Username, accessInfo.JTI, refreshInfo.JTI, clientType, ip, ua, accessInfo.ExpiresAt, refreshInfo.ExpiresAt)
+	service.CreateSessionWithRefresh(user.ID, user.Username, accessInfo.JTI, refreshInfo.JTI, clientType, clientName, ip, ua, accessInfo.ExpiresAt, refreshInfo.ExpiresAt)
 
 	response.Success(c, gin.H{
 		"message":       "登录成功",

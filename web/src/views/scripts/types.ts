@@ -12,3 +12,8 @@ export interface ScriptVersionRecord {
   content_length: number
   created_at: string
 }
+
+export interface ScriptVersionDetail extends ScriptVersionRecord {
+  script_path: string
+  content: string
+}

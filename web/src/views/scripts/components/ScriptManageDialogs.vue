@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { Upload } from '@element-plus/icons-vue'
-import { computed } from 'vue'
+import { computed, defineAsyncComponent } from 'vue'
 import type { ScriptVersionRecord } from '../types'
+
+const MonacoDiffEditor = defineAsyncComponent(() => import('@/components/MonacoDiffEditor.vue'))
 
 const showCreateFileDialog = defineModel<boolean>('showCreateFileDialog', { required: true })
 const showCreateDirDialog = defineModel<boolean>('showCreateDirDialog', { required: true })
 const showRenameDialog = defineModel<boolean>('showRenameDialog', { required: true })
 const showVersionDialog = defineModel<boolean>('showVersionDialog', { required: true })
+const showVersionDiffDialog = defineModel<boolean>('showVersionDiffDialog', { required: true })
 const showUploadDialog = defineModel<boolean>('showUploadDialog', { required: true })
 
 const newFileName = defineModel<string>('newFileName', { required: true })
@@ -15,15 +18,22 @@ const newDirName = defineModel<string>('newDirName', { required: true })
 const newDirParent = defineModel<string>('newDirParent', { required: true })
 const renameTarget = defineModel<string>('renameTarget', { required: true })
 const uploadDir = defineModel<string>('uploadDir', { required: true })
+const versionDiffOriginalTitle = defineModel<string>('versionDiffOriginalTitle', { required: true })
+const versionDiffModifiedTitle = defineModel<string>('versionDiffModifiedTitle', { required: true })
+const versionDiffOriginalContent = defineModel<string>('versionDiffOriginalContent', { required: true })
+const versionDiffModifiedContent = defineModel<string>('versionDiffModifiedContent', { required: true })
 
 const props = defineProps<{
   isMobile: boolean
   allFolders: string[]
+  editorLanguage: string
   versions: ScriptVersionRecord[]
   versionsLoading: boolean
+  versionDiffLoading: boolean
   onCreateFile: () => void | Promise<void>
   onCreateDir: () => void | Promise<void>
   onRename: () => void | Promise<void>
+  onCompareVersion: (version: ScriptVersionRecord) => void | Promise<void>
   onRollback: (versionId: number) => void | Promise<void>
   onUploadFileChange: (file: any, files: any[]) => void
   onUploadSubmit: () => void | Promise<void>
@@ -87,12 +97,48 @@ const nestedFolders = computed(() => props.allFolders.filter(folder => folder))
       <el-table-column prop="created_at" label="时间" width="180">
         <template #default="{ row }">{{ new Date(row.created_at).toLocaleString() }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="100" fixed="right">
+      <el-table-column label="操作" width="140" fixed="right">
         <template #default="{ row }">
+          <el-button size="small" text type="primary" @click="onCompareVersion(row)">对比</el-button>
           <el-button size="small" text type="primary" @click="onRollback(row.id)">回滚</el-button>
         </template>
       </el-table-column>
     </el-table>
+  </el-dialog>
+
+  <el-dialog
+    v-model="showVersionDiffDialog"
+    title="版本差异对比"
+    :width="isMobile ? '100%' : '92%'"
+    :fullscreen="isMobile"
+    :top="isMobile ? '0' : '4vh'"
+    :close-on-click-modal="false"
+    append-to-body
+    destroy-on-close
+  >
+    <div
+      class="version-diff-dialog"
+      v-loading="props.versionDiffLoading"
+      element-loading-text="正在加载历史版本内容..."
+    >
+      <div class="version-diff-header">
+        <div class="version-diff-side">
+          <span class="version-diff-caption">左侧：历史代码</span>
+          <strong>{{ versionDiffOriginalTitle || '历史版本' }}</strong>
+        </div>
+        <div class="version-diff-side version-diff-side--current">
+          <span class="version-diff-caption">右侧：当前代码</span>
+          <strong>{{ versionDiffModifiedTitle || '当前代码' }}</strong>
+        </div>
+      </div>
+      <MonacoDiffEditor
+        v-if="!props.versionDiffLoading"
+        :original-value="versionDiffOriginalContent"
+        :modified-value="versionDiffModifiedContent"
+        :language="props.editorLanguage"
+        class="version-diff-editor"
+      />
+    </div>
   </el-dialog>
 
   <el-dialog v-model="showUploadDialog" title="上传文件" :width="isMobile ? '90%' : '480px'" :fullscreen="isMobile" destroy-on-close>
@@ -124,3 +170,56 @@ const nestedFolders = computed(() => props.allFolders.filter(folder => folder))
     </template>
   </el-dialog>
 </template>
+
+<style scoped lang="scss">
+.version-diff-dialog {
+  display: flex;
+  flex-direction: column;
+  min-height: 70vh;
+}
+
+.version-diff-header {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.version-diff-side {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 10px;
+  background: var(--el-fill-color-light);
+}
+
+.version-diff-side--current {
+  text-align: right;
+}
+
+.version-diff-caption {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.version-diff-editor {
+  flex: 1;
+  min-height: 62vh;
+}
+
+@media (max-width: 768px) {
+  .version-diff-header {
+    grid-template-columns: 1fr;
+  }
+
+  .version-diff-side--current {
+    text-align: left;
+  }
+
+  .version-diff-editor {
+    min-height: calc(100dvh - 220px);
+  }
+}
+</style>

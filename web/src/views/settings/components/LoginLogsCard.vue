@@ -42,6 +42,10 @@ defineProps<{
         </div>
         <div class="dd-mobile-card__body">
           <div class="dd-mobile-card__grid">
+            <div class="dd-mobile-card__field dd-mobile-card__field--full">
+              <span class="dd-mobile-card__label">客户端</span>
+              <span class="dd-mobile-card__value">{{ row.client_name || row.client_type_label || '-' }}</span>
+            </div>
             <div class="dd-mobile-card__field">
               <span class="dd-mobile-card__label">登录方式</span>
               <span class="dd-mobile-card__value">{{ row.method }}</span>
@@ -70,6 +74,9 @@ defineProps<{
         </template>
       </el-table-column>
       <el-table-column prop="ip" label="IP地址" width="140" />
+      <el-table-column label="客户端" min-width="180" show-overflow-tooltip>
+        <template #default="{ row }">{{ row.client_name || row.client_type_label || '-' }}</template>
+      </el-table-column>
       <el-table-column prop="method" label="登录方式" width="100" />
       <el-table-column prop="message" label="原因" show-overflow-tooltip />
       <el-table-column prop="created_at" label="时间" width="170">

@@ -48,7 +48,12 @@ func (h *SecurityHandler) LoginLogs(c *gin.Context) {
 
 	data := make([]map[string]interface{}, len(logs))
 	for i, l := range logs {
-		data[i] = l.ToDict()
+		item := l.ToDict()
+		clientType := service.DetectSessionClientType("", "", l.UserAgent)
+		item["client_type"] = clientType
+		item["client_type_label"] = service.SessionClientLabel(clientType)
+		item["client_name"] = service.ResolveStoredSessionClientName(clientType, l.ClientName, l.UserAgent)
+		data[i] = item
 	}
 
 	response.Paginated(c, data, total, page, pageSize)
@@ -67,6 +72,7 @@ func (h *SecurityHandler) Sessions(c *gin.Context) {
 		clientType := service.DetectSessionClientType(s.ClientType, "", s.UserAgent)
 		item["client_type"] = clientType
 		item["client_type_label"] = service.SessionClientLabel(clientType)
+		item["client_name"] = service.ResolveStoredSessionClientName(clientType, s.ClientName, s.UserAgent)
 		data[i] = item
 	}
 

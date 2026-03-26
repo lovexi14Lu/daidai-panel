@@ -27,6 +27,7 @@ const {
   showCreateDirDialog,
   showRenameDialog,
   showVersionDialog,
+  showVersionDiffDialog,
   showUploadDialog,
   uploadDir,
   newFileName,
@@ -36,6 +37,11 @@ const {
   renameTarget,
   versions,
   versionsLoading,
+  versionDiffLoading,
+  versionDiffOriginalTitle,
+  versionDiffModifiedTitle,
+  versionDiffOriginalContent,
+  versionDiffModifiedContent,
   formatting,
   editorLanguage,
   hasChanges,
@@ -57,6 +63,7 @@ const {
   handleAddToTask,
   loadVersions,
   handleRollback,
+  handleCompareVersion,
   handleFormat,
   handleDownload,
   handleMobileBack
@@ -150,6 +157,7 @@ function handleDeleteSelectedFile() {
       v-model:show-create-dir-dialog="showCreateDirDialog"
       v-model:show-rename-dialog="showRenameDialog"
       v-model:show-version-dialog="showVersionDialog"
+      v-model:show-version-diff-dialog="showVersionDiffDialog"
       v-model:show-upload-dialog="showUploadDialog"
       v-model:new-file-name="newFileName"
       v-model:new-file-parent="newFileParent"
@@ -157,13 +165,20 @@ function handleDeleteSelectedFile() {
       v-model:new-dir-parent="newDirParent"
       v-model:rename-target="renameTarget"
       v-model:upload-dir="uploadDir"
+      v-model:version-diff-original-title="versionDiffOriginalTitle"
+      v-model:version-diff-modified-title="versionDiffModifiedTitle"
+      v-model:version-diff-original-content="versionDiffOriginalContent"
+      v-model:version-diff-modified-content="versionDiffModifiedContent"
       :is-mobile="isMobile"
       :all-folders="allFolders"
+      :editor-language="editorLanguage"
       :versions="versions"
       :versions-loading="versionsLoading"
+      :version-diff-loading="versionDiffLoading"
       :on-create-file="handleCreateFile"
       :on-create-dir="handleCreateDir"
       :on-rename="handleRename"
+      :on-compare-version="handleCompareVersion"
       :on-rollback="handleRollback"
       :on-upload-file-change="handleUploadFileChange"
       :on-upload-submit="handleUploadSubmit"

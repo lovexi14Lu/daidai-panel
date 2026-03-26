@@ -813,9 +813,13 @@ func absInt(value int) int {
 	return value
 }
 
-func buildCmd(plan *CommandExecutionPlan, scriptsDir string, envVars map[string]string) *exec.Cmd {
+func buildCmd(plan *CommandExecutionPlan, workDir string, envVars map[string]string) *exec.Cmd {
 	var cmd *exec.Cmd
-	_ = EnsureBuiltinNotifyHelpers(scriptsDir, filepath.Dir(plan.FullPath))
+	helperBaseDir := strings.TrimSpace(envVars["DAIDAI_SCRIPTS_DIR"])
+	if helperBaseDir != "" {
+		_ = EnsureBuiltinNotifyHelpers(helperBaseDir)
+		_ = cleanupManagedHelperCopies(helperBaseDir, filepath.Dir(plan.FullPath))
+	}
 	if plan.Interpreter == "bash" {
 		_ = NormalizeShellScriptFile(plan.FullPath)
 	}

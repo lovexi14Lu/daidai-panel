@@ -199,6 +199,9 @@ func main() {
 	if err := service.EnsureBuiltinNotifyHelpers(cfg.Data.ScriptsDir); err != nil {
 		log.Printf("prepare builtin notify helpers failed: %v", err)
 	}
+	if err := service.CleanupManagedHelperCopiesUnderRoot(cfg.Data.ScriptsDir); err != nil {
+		log.Printf("cleanup duplicated notify helpers failed: %v", err)
+	}
 
 	service.InitSchedulerV2()
 	defer service.ShutdownSchedulerV2()

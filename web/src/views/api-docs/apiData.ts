@@ -766,7 +766,7 @@ panel.add_or_update_env(
         method: 'POST',
         path: '/api/notifications/send',
         title: '脚本发送通知',
-        description: '供脚本或外部程序主动调用系统通知配置进行推送。支持普通用户 JWT，也支持带 notifications scope 的 Open API Bearer Token。未指定 channel_id / channel_ids 时，会发送到全部已启用通知渠道；任务自带默认通知渠道时，helper 会优先落到该渠道，传 ignore_default_config=true 可跳过默认渠道。面板运行脚本时会自动在脚本目录注入 notify.py 和 sendNotify.js，可直接按青龙风格先收集 notifyStr 再发送。',
+        description: '供脚本或外部程序主动调用系统通知配置进行推送。支持普通用户 JWT，也支持带 notifications scope 的 Open API Bearer Token。未指定 channel_id / channel_ids 时，会发送到全部已启用通知渠道；任务自带默认通知渠道时，helper 会优先落到该渠道，传 ignore_default_config=true 可跳过默认渠道。面板运行脚本时会统一在脚本根目录提供 notify.py 和 sendNotify.js，不再向每个脚本子目录复制，可直接按青龙风格先收集 notifyStr 再发送。',
         auth: 'jwt',
         bodyParams: [
           { name: 'title', type: 'string', required: true, description: '通知标题', example: '签到脚本通知' },
