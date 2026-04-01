@@ -454,6 +454,10 @@ func executePanelUpdateWithOptions(plan *panelUpdatePlan, options panelUpdateExe
 			}
 			return
 		}
+
+		rmiCtx, rmiCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		dockerCommandOutput(rmiCtx, "rmi", plan.PullImageName)
+		rmiCancel()
 	}
 
 	panelUpdater.setRunning("scheduling", "镜像已拉取完成，正在启动更新辅助容器")
