@@ -43,6 +43,9 @@ func TestScriptDownloadSupportsBinarySOFiles(t *testing.T) {
 	if got := rec.Header().Get("Content-Disposition"); got == "" {
 		t.Fatal("expected Content-Disposition header for attachment")
 	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store, no-cache, must-revalidate" {
+		t.Fatalf("expected download response to disable cache, got %q", got)
+	}
 
 	if !bytes.Equal(rec.Body.Bytes(), expected) {
 		t.Fatalf("unexpected download body: %#v", rec.Body.Bytes())

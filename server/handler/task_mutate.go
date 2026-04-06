@@ -87,7 +87,7 @@ func (h *TaskHandler) Create(c *gin.Context) {
 		Status:          model.TaskStatusEnabled,
 		Timeout:         86400,
 		RetryInterval:   60,
-		NotifyOnFailure: true,
+		NotifyOnFailure: false,
 	}
 
 	if req.Timeout != nil {

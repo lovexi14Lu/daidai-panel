@@ -3,6 +3,7 @@ package handler_test
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"testing"
 
@@ -415,6 +416,39 @@ func TestTaskCreatePersistsFalseNotifyOnFailure(t *testing.T) {
 	}
 }
 
+func TestTaskCreateDefaultsNotifyOnFailureToFalse(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
+	engine := newProtectedRouter()
+	user := testutil.MustCreateUser(t, "default-notify-operator", "operator")
+	accessToken := testutil.MustCreateAccessToken(t, user.Username, user.Role)
+
+	rec := performJSONRequest(
+		engine,
+		http.MethodPost,
+		"/api/v1/tasks",
+		`{
+			"name":"create default notify false",
+			"command":"echo hi",
+			"cron_expression":"0 0 * * *"
+		}`,
+		map[string]string{"Authorization": "Bearer " + accessToken},
+		"",
+	)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	payload := decodeJSONMap(t, rec)
+	item, ok := payload["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected task payload, got %#v", payload["data"])
+	}
+	if got, ok := item["notify_on_failure"].(bool); !ok || got {
+		t.Fatalf("expected default notify_on_failure=false, got %#v", item["notify_on_failure"])
+	}
+}
+
 func TestTaskCreateManualTypeAllowsEmptyCron(t *testing.T) {
 	testutil.SetupTestEnv(t)
 
@@ -763,5 +797,151 @@ func TestTaskNotificationChannelsExposeSafeFieldsOnly(t *testing.T) {
 	}
 	if _, exists := firstItem["config"]; exists {
 		t.Fatalf("did not expect config field in safe task channel payload: %#v", firstItem)
+	}
+}
+
+func TestTaskListAppliesViewFiltersBeforePagination(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
+	engine := newProtectedRouter()
+	user := testutil.MustCreateUser(t, "view-filter-operator", "operator")
+	accessToken := testutil.MustCreateAccessToken(t, user.Username, user.Role)
+
+	for i := 1; i <= 25; i++ {
+		task := &model.Task{
+			Name:           fmt.Sprintf("task-%02d", i),
+			Command:        fmt.Sprintf("task scripts/demo-%02d.py", i),
+			CronExpression: "0 0 * * *",
+			Status:         model.TaskStatusEnabled,
+		}
+		if i > 20 {
+			task.SetLabelsFromSlice([]string{"目标标签"})
+		}
+		if err := database.DB.Create(task).Error; err != nil {
+			t.Fatalf("create task %d: %v", i, err)
+		}
+	}
+
+	filterJSON := `[{"field":"labels","operator":"equals","value":"目标标签"}]`
+	rec := performRequest(engine, http.MethodGet, "/api/v1/tasks?page=1&page_size=20&filters="+url.QueryEscape(filterJSON), map[string]string{
+		"Authorization": "Bearer " + accessToken,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	payload := decodeJSONMap(t, rec)
+	if got, ok := payload["total"].(float64); !ok || int(got) != 5 {
+		t.Fatalf("expected filtered total 5, got %#v", payload["total"])
+	}
+
+	items, ok := payload["data"].([]interface{})
+	if !ok {
+		t.Fatalf("expected data array, got %#v", payload["data"])
+	}
+	if len(items) != 5 {
+		t.Fatalf("expected 5 filtered tasks on first page, got %d", len(items))
+	}
+}
+
+func TestTaskListFiltersLabelsAgainstDisplayLabels(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
+	engine := newProtectedRouter()
+	user := testutil.MustCreateUser(t, "display-label-filter", "operator")
+	accessToken := testutil.MustCreateAccessToken(t, user.Username, user.Role)
+
+	subscription := &model.Subscription{
+		Name:    "华星电信999答题",
+		Type:    model.SubTypeGitRepo,
+		URL:     "https://example.com/demo.git",
+		Enabled: true,
+	}
+	if err := database.DB.Create(subscription).Error; err != nil {
+		t.Fatalf("create subscription: %v", err)
+	}
+
+	matchedTask := &model.Task{
+		Name:           "matched task",
+		Command:        "task telecom/main.py",
+		CronExpression: "0 0 * * *",
+		Status:         model.TaskStatusEnabled,
+	}
+	matchedTask.SetLabelsFromSlice([]string{"subscription:" + strconv.FormatUint(uint64(subscription.ID), 10)})
+	if err := database.DB.Create(matchedTask).Error; err != nil {
+		t.Fatalf("create matched task: %v", err)
+	}
+
+	unmatchedTask := &model.Task{
+		Name:           "other task",
+		Command:        "task other/main.py",
+		CronExpression: "0 0 * * *",
+		Status:         model.TaskStatusEnabled,
+	}
+	unmatchedTask.SetLabelsFromSlice([]string{"普通标签"})
+	if err := database.DB.Create(unmatchedTask).Error; err != nil {
+		t.Fatalf("create unmatched task: %v", err)
+	}
+
+	filterJSON := `[{"field":"labels","operator":"equals","value":"华星电信999答题"}]`
+	rec := performRequest(engine, http.MethodGet, "/api/v1/tasks?filters="+url.QueryEscape(filterJSON), map[string]string{
+		"Authorization": "Bearer " + accessToken,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	payload := decodeJSONMap(t, rec)
+	items, ok := payload["data"].([]interface{})
+	if !ok || len(items) != 1 {
+		t.Fatalf("expected exactly one matched task, got %#v", payload["data"])
+	}
+
+	item, ok := items[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected task object, got %#v", items[0])
+	}
+	if got := item["name"]; got != matchedTask.Name {
+		t.Fatalf("expected matched task %q, got %#v", matchedTask.Name, got)
+	}
+}
+
+func TestTaskListAppliesViewSortRules(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
+	engine := newProtectedRouter()
+	user := testutil.MustCreateUser(t, "view-sort-operator", "operator")
+	accessToken := testutil.MustCreateAccessToken(t, user.Username, user.Role)
+
+	for _, name := range []string{"task-c", "task-a", "task-b"} {
+		task := &model.Task{
+			Name:           name,
+			Command:        "task demo.py",
+			CronExpression: "0 0 * * *",
+			Status:         model.TaskStatusEnabled,
+		}
+		if err := database.DB.Create(task).Error; err != nil {
+			t.Fatalf("create task %q: %v", name, err)
+		}
+	}
+
+	sortJSON := `[{"field":"name","direction":"asc"}]`
+	rec := performRequest(engine, http.MethodGet, "/api/v1/tasks?page=1&page_size=2&sort_rules="+url.QueryEscape(sortJSON), map[string]string{
+		"Authorization": "Bearer " + accessToken,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	payload := decodeJSONMap(t, rec)
+	items, ok := payload["data"].([]interface{})
+	if !ok || len(items) != 2 {
+		t.Fatalf("expected first page with 2 sorted tasks, got %#v", payload["data"])
+	}
+
+	firstItem, _ := items[0].(map[string]interface{})
+	secondItem, _ := items[1].(map[string]interface{})
+	if firstItem["name"] != "task-a" || secondItem["name"] != "task-b" {
+		t.Fatalf("expected sorted names [task-a task-b], got [%v %v]", firstItem["name"], secondItem["name"])
 	}
 }

@@ -67,6 +67,7 @@ const {
   handleSaveSystemConfig,
   handleIconUpload,
   handleLogBackgroundUpload,
+  previewPanelAppearance,
   handleSaveTaskConfig,
   handleSaveProxy,
   handleSaveCaptcha
@@ -222,6 +223,7 @@ onMounted(() => {
           :on-save="handleSaveSystemConfig"
           :on-icon-upload="handleIconUpload"
           :on-log-background-upload="handleLogBackgroundUpload"
+          :on-appearance-preview="previewPanelAppearance"
         />
       </el-tab-pane>
 

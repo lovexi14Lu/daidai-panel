@@ -191,7 +191,7 @@ docker compose -f docker-compose.debian.yml up -d
 如果你是基于当前源码本地试跑，也可以手动构建：
 
 ```bash
-docker build --build-arg VERSION=2.0.3 -f Dockerfile.debian -t daidai-panel:debian-local .
+docker build --build-arg VERSION=2.0.4 -f Dockerfile.debian -t daidai-panel:debian-local .
 ```
 
 从 `v1.9.0` 开始，仓库里的发布工作流会自动发布 Debian 运行时镜像。Debian 运行时只保留一个滚动标签：
@@ -289,17 +289,17 @@ docker run -d \
 
 ## 自动发布
 
-仓库已配置 GitHub Actions 发布工作流。推送形如 `v2.0.3` 的 tag 后，会自动完成：
+仓库已配置 GitHub Actions 发布工作流。推送形如 `v2.0.4` 的 tag 后，会自动完成：
 
 - 创建 GitHub Release
 - 推送 Alpine 运行时镜像：`linzixuanzz/daidai-panel:latest`
-- 推送 Alpine 版本镜像：`linzixuanzz/daidai-panel:2.0.3`
+- 推送 Alpine 版本镜像：`linzixuanzz/daidai-panel:2.0.4`
 - 推送 Debian 运行时镜像：`linzixuanzz/daidai-panel:debian`
 
 发布前请先准备对应版本的更新日志文件，例如：
 
 ```text
-docs/release-notes/v2.0.3.md
+docs/release-notes/v2.0.4.md
 ```
 
 工作流会优先读取这份文件作为 GitHub Release 正文；如果缺失，会直接失败并提示补齐，确保每次发布都带有明确更新日志。
@@ -307,8 +307,8 @@ docs/release-notes/v2.0.3.md
 本次版本发布命令示例：
 
 ```bash
-git tag v2.0.3
-git push origin v2.0.3
+git tag v2.0.4
+git push origin v2.0.4
 ```
 
 ## 更新方法
@@ -327,7 +327,7 @@ docker compose up -d
 如果你当前使用的是源码仓库里手动本地构建的 Debian 运行时镜像，更新方式是重新构建：
 
 ```bash
-docker build --build-arg VERSION=2.0.3 -f Dockerfile.debian -t daidai-panel:debian-local .
+docker build --build-arg VERSION=2.0.4 -f Dockerfile.debian -t daidai-panel:debian-local .
 ```
 
 如果你使用的是 Debian 运行时镜像，则按下面方式更新：
@@ -335,6 +335,67 @@ docker build --build-arg VERSION=2.0.3 -f Dockerfile.debian -t daidai-panel:debi
 ```bash
 docker pull docker.1ms.run/linzixuanzz/daidai-panel:debian
 docker compose -f docker-compose.debian.yml up -d
+```
+
+## 容器内置命令
+
+容器内现在内置了 `ddp` 命令，用于在终端里直接做常见运维操作。
+
+> **说明**：没有使用 `dd` 作为命令名，因为 Linux 自带 `dd` 命令，容易冲突。
+
+常见示例：
+
+```bash
+docker exec -it daidai-panel ddp help
+docker exec -it daidai-panel ddp status
+docker exec -it daidai-panel ddp check
+docker exec -it daidai-panel ddp logs --lines 200
+docker exec -it daidai-panel ddp script list
+docker exec -it daidai-panel ddp script cat demo.py
+docker exec -it daidai-panel ddp script fetch https://example.com/test.py --path tools/test.py
+docker exec -it daidai-panel ddp env list
+docker exec -it daidai-panel ddp env set JD_COOKIE "pt_key=xxx;pt_pin=yyy;" --group 京东
+docker exec -it daidai-panel ddp task list --status running
+docker exec -it daidai-panel ddp task logs 12 --lines 80
+docker exec -it daidai-panel ddp sub list
+docker exec -it daidai-panel ddp sub logs 3 --lines 100
+docker exec -it daidai-panel ddp restart
+docker exec -it daidai-panel ddp update
+docker exec -it daidai-panel ddp clean-logs 7
+docker exec -it daidai-panel ddp backup create --name nightly
+docker exec -it daidai-panel ddp backup list
+docker exec -it daidai-panel ddp task run 12
+docker exec -it daidai-panel ddp sub pull 我的订阅
+docker exec -it daidai-panel ddp reset-login --all
+docker exec -it daidai-panel ddp disable-2fa admin
+```
+
+命令说明：
+
+- `ddp status`：查看版本、数据目录、端口、任务数、资源占用和服务状态
+- `ddp check`：检查配置文件、数据库、运行目录、运行时命令、Docker Socket 等关键项
+- `ddp logs`：查看 `panel.log`
+- `ddp script list/cat/fetch`：浏览脚本、查看脚本内容、从远程地址直接保存脚本到面板目录
+- `ddp env list/get/set/delete`：在终端里直接管理环境变量
+- `ddp task list/logs`：查看任务清单和最近一次执行日志
+- `ddp sub list/logs`：查看订阅清单和最近一次拉取日志
+- `ddp restart`：重启容器内的 `daidai-server` 进程
+- `ddp update`：复用面板现有的一键更新链路拉取并重建当前容器
+- `ddp clean-logs [days]`：清理旧任务日志文件
+- `ddp backup create/list/restore/delete`：管理面板备份
+- `ddp task run <任务ID或名称>`：在当前终端同步执行一个任务并等待结果
+- `ddp task stop <任务ID或名称>`：终止当前已启动且有 PID 的任务进程
+- `ddp sub pull <订阅ID或名称>`：立即执行一次订阅拉取，并实时输出日志
+- `ddp reset-login`：重置登录失败次数，可按用户名、IP 或全部清除
+- `ddp disable-2fa`：禁用指定用户或全部用户的 2FA
+
+如果你直接给镜像传命令参数，也可以工作，例如：
+
+```bash
+docker run --rm \
+  -v $(pwd)/Dumb-Panel:/app/Dumb-Panel \
+  docker.1ms.run/linzixuanzz/daidai-panel:latest \
+  ddp version
 ```
 
 ## 数据目录

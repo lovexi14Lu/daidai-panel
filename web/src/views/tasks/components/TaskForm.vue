@@ -26,7 +26,7 @@ const form = ref({
   random_delay_seconds: null as number | null,
   max_retries: 0,
   retry_interval: 60,
-  notify_on_failure: true,
+  notify_on_failure: false,
   notify_on_success: false,
   notification_channel_id: null as number | null,
   labels: [] as string[],
@@ -67,7 +67,7 @@ watch(() => props.visible, (val) => {
       random_delay_seconds: taskRandomDelay,
       max_retries: props.task.max_retries ?? 0,
       retry_interval: props.task.retry_interval ?? 60,
-      notify_on_failure: props.task.notify_on_failure ?? true,
+      notify_on_failure: props.task.notify_on_failure ?? false,
       notify_on_success: props.task.notify_on_success ?? false,
       notification_channel_id: props.task.notification_channel_id ?? null,
       labels: editableLabels,
@@ -85,7 +85,7 @@ watch(() => props.visible, (val) => {
       cron_expression: p?.cron_expression || '* * * * *',
       task_type: p?.task_type || 'cron',
       timeout: 86400, random_delay_seconds: null, max_retries: 0, retry_interval: 60,
-      notify_on_failure: true, notify_on_success: false, notification_channel_id: null, labels: [], depends_on: null,
+      notify_on_failure: false, notify_on_success: false, notification_channel_id: null, labels: [], depends_on: null,
       task_before: '', task_after: '', allow_multiple_instances: false,
     }
   }

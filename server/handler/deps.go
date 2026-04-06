@@ -738,7 +738,10 @@ func installDependency(id uint, depType, name string) {
 		cmd = exec.Command("npm", "install", "--prefix", filepath.Join(depsDir, "nodejs"), name)
 		cmd.Env = service.NpmInstallEnv(service.AppendProxyEnv(os.Environ()), service.CurrentNpmMirror())
 	case model.DepTypePython:
-		pipBin := filepath.Join(depsDir, "python", "venv", "bin", "pip")
+		pipBin := service.ResolveManagedPipBinary()
+		if strings.TrimSpace(pipBin) == "" {
+			pipBin = "pip"
+		}
 		cmd = exec.Command(pipBin, "install", name)
 		cmd.Env = append(service.PipInstallEnv(service.AppendProxyEnv(os.Environ()), service.CurrentPipMirror()), "TMPDIR=/tmp")
 	case model.DepTypeLinux:
@@ -784,7 +787,10 @@ func uninstallDependency(id uint, depType, name string) {
 		cmd = exec.Command("npm", "uninstall", "--prefix", filepath.Join(depsDir, "nodejs"), name)
 		cmd.Env = service.AppendProxyEnv(os.Environ())
 	case model.DepTypePython:
-		pipBin := filepath.Join(depsDir, "python", "venv", "bin", "pip")
+		pipBin := service.ResolveManagedPipBinary()
+		if strings.TrimSpace(pipBin) == "" {
+			pipBin = "pip"
+		}
 		cmd = exec.Command(pipBin, "uninstall", "-y", name)
 		cmd.Env = service.AppendProxyEnv(os.Environ())
 	case model.DepTypeLinux:
@@ -818,7 +824,10 @@ func forceUninstallDependency(depType, name string) {
 		cmd = exec.Command("npm", "uninstall", "--prefix", filepath.Join(depsDir, "nodejs"), "--force", name)
 		cmd.Env = service.AppendProxyEnv(os.Environ())
 	case model.DepTypePython:
-		pipBin := filepath.Join(depsDir, "python", "venv", "bin", "pip")
+		pipBin := service.ResolveManagedPipBinary()
+		if strings.TrimSpace(pipBin) == "" {
+			pipBin = "pip"
+		}
 		cmd = exec.Command(pipBin, "uninstall", "-y", "--no-deps", name)
 		cmd.Env = service.AppendProxyEnv(os.Environ())
 	case model.DepTypeLinux:

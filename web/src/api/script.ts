@@ -31,7 +31,7 @@ export const scriptApi = {
 
   download(path: string) {
     return request.get('/scripts/download', {
-      params: { path },
+      params: { path, t: Date.now() },
       responseType: 'blob'
     }) as Promise<Blob>
   },

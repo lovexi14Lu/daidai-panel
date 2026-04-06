@@ -18,12 +18,12 @@ var (
 	autoInstallGoModuleRe   = regexp.MustCompile(`(?:no required module provides package|missing go\.sum entry for module providing package)\s+([^\s:;]+)`)
 
 	thirdPartyExcludedModules = map[string]bool{
-		"sendNotify":   true,
-		"notify":       true,
-		"CryptoJS":     true,
-		"ql":           true,
-		"qlApi":        true,
-		"jdCookie":     true,
+		"sendNotify":           true,
+		"notify":               true,
+		"CryptoJS":             true,
+		"ql":                   true,
+		"qlApi":                true,
+		"jdCookie":             true,
 		"JD_DmFruitShareCodes": true,
 	}
 )
@@ -114,8 +114,8 @@ func InstallAutoDependency(candidate *AutoInstallCandidate, envVars map[string]s
 
 	switch candidate.Manager {
 	case "python":
-		venvPip := filepath.Join(depsDir, "python", "venv", "bin", "pip3")
-		if _, err := os.Stat(venvPip); err != nil {
+		venvPip := ResolveManagedPipBinary()
+		if strings.TrimSpace(venvPip) == "" {
 			venvPip = "pip3"
 		}
 		cmd := exec.Command(venvPip, "install", candidate.PackageName)

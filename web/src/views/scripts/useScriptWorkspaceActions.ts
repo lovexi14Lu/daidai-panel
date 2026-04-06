@@ -59,7 +59,7 @@ export function useScriptWorkspaceActions({
     return err === 'cancel' || err === 'close' || String(err) === 'cancel' || String(err) === 'close'
   }
 
-  async function handleSave() {
+  async function saveCurrentFile() {
     if (!selectedFile.value || isBinary.value) return
     saving.value = true
     try {
@@ -76,11 +76,17 @@ export function useScriptWorkspaceActions({
       await scriptApi.saveContent(selectedFile.value, fileContent.value, versionMessage)
       originalContent.value = fileContent.value
       ElMessage.success('保存成功')
+      return true
     } catch {
       ElMessage.error('保存失败')
+      return false
     } finally {
       saving.value = false
     }
+  }
+
+  async function handleSave() {
+    await saveCurrentFile()
   }
 
   async function handleCreateFile() {
@@ -356,6 +362,12 @@ export function useScriptWorkspaceActions({
     if (!selectedFile.value) return
     void (async () => {
       try {
+        if (hasChanges.value && !isBinary.value) {
+          const saved = await saveCurrentFile()
+          if (!saved) {
+            return
+          }
+        }
         const blob = await scriptApi.download(selectedFile.value)
         const url = URL.createObjectURL(blob)
         const a = document.createElement('a')

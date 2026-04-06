@@ -9,6 +9,7 @@ defineProps<{
   onSave: () => void
   onIconUpload: (file: File) => boolean
   onLogBackgroundUpload: (file: File) => boolean
+  onAppearancePreview: () => void
 }>()
 </script>
 
@@ -50,16 +51,16 @@ defineProps<{
       <div class="form-field">
         <label>编辑器背景颜色</label>
         <div class="log-bg-controls">
-          <el-color-picker v-model="form.editor_background_color" />
-          <el-input v-model="form.editor_background_color" placeholder="留空使用默认编辑器背景" />
+          <el-color-picker v-model="form.editor_background_color" @change="onAppearancePreview" />
+          <el-input v-model="form.editor_background_color" placeholder="留空使用默认编辑器背景" @change="onAppearancePreview" />
         </div>
         <span class="form-hint">统一应用到脚本只读预览和在线编辑器，留空保持默认深色背景</span>
       </div>
       <div class="form-field">
         <label>日志背景颜色</label>
         <div class="log-bg-controls">
-          <el-color-picker v-model="form.log_background_color" show-alpha />
-          <el-input v-model="form.log_background_color" placeholder="#0f172a" />
+          <el-color-picker v-model="form.log_background_color" show-alpha @change="onAppearancePreview" />
+          <el-input v-model="form.log_background_color" placeholder="#0f172a" @change="onAppearancePreview" />
         </div>
         <span class="form-hint">统一应用到任务日志和执行日志查看器，建议使用深色以保证文本可读性</span>
       </div>
@@ -73,7 +74,13 @@ defineProps<{
           >
             <el-button size="small"><el-icon><Upload /></el-icon>上传背景图</el-button>
           </el-upload>
-          <el-button v-if="form.log_background_image" size="small" text type="danger" @click="form.log_background_image = ''">
+          <el-button
+            v-if="form.log_background_image"
+            size="small"
+            text
+            type="danger"
+            @click="form.log_background_image = ''; onAppearancePreview()"
+          >
             移除背景图
           </el-button>
         </div>

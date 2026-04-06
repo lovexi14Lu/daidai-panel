@@ -1,8 +1,6 @@
-export interface PanelAppearanceSettings {
-  editor_background_color?: string
-  log_background_color?: string
-  log_background_image?: string
-}
+import { loadPanelSettings, type PanelSettingsPayload } from './panelSettings'
+
+export interface PanelAppearanceSettings extends PanelSettingsPayload {}
 
 const DEFAULT_LOG_BACKGROUND_COLOR = '#0f172a'
 const DEFAULT_EDITOR_BACKGROUND_COLOR = '#111827'
@@ -75,13 +73,8 @@ export function applyPanelAppearance(settings?: PanelAppearanceSettings | null) 
 
 export async function fetchAndApplyPanelAppearance() {
   try {
-    const response = await fetch('/api/system/panel-settings', { cache: 'no-store' })
-    if (!response.ok) {
-      return
-    }
-
-    const payload = await response.json() as { data?: PanelAppearanceSettings }
-    applyPanelAppearance(payload.data || null)
+    const settings = await loadPanelSettings()
+    applyPanelAppearance(settings || null)
   } catch {
     // ignore startup appearance load failures
   }

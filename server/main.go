@@ -10,11 +10,10 @@ import (
 	"sort"
 	"strings"
 
+	"daidai-panel/appboot"
 	"daidai-panel/config"
-	"daidai-panel/database"
 	"daidai-panel/handler"
 	"daidai-panel/middleware"
-	"daidai-panel/model"
 	"daidai-panel/router"
 	"daidai-panel/service"
 
@@ -161,40 +160,8 @@ func main() {
 	gin.DefaultWriter = panelWriter
 	gin.DefaultErrorWriter = panelWriter
 
-	database.Init(&cfg.Database)
-
-	database.AutoMigrate(
-		&model.User{},
-		&model.TokenBlocklist{},
-		&model.Task{},
-		&model.TaskLog{},
-		&model.SystemConfig{},
-		&model.EnvVar{},
-		&model.ScriptVersion{},
-		&model.Subscription{},
-		&model.SubLog{},
-		&model.NotifyChannel{},
-		&model.SSHKey{},
-		&model.LoginLog{},
-		&model.LoginAttempt{},
-		&model.UserSession{},
-		&model.IPWhitelist{},
-		&model.SecurityAudit{},
-		&model.TwoFactorAuth{},
-		&model.OpenApp{},
-		&model.ApiCallLog{},
-		&model.Platform{},
-		&model.PlatformToken{},
-		&model.PlatformTokenLog{},
-		&model.Dependency{},
-		&model.TaskView{},
-	)
-
-	database.EnsureColumns()
-
-	model.InitDefaultConfigs()
-	if err := middleware.ConfigureTrustedProxyCIDRs(model.GetRegisteredConfig("trusted_proxy_cidrs")); err != nil {
-		log.Fatalf("failed to configure trusted proxies: %v", err)
+	if err := appboot.InitWithConfig(cfg); err != nil {
+		log.Fatalf("bootstrap failed: %v", err)
 	}
 
 	verifyInstalledDeps()

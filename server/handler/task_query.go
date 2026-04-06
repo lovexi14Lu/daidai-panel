@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"sort"
 	"strconv"
 	"strings"
@@ -12,12 +13,34 @@ import (
 	"daidai-panel/service"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
+
+type taskListFilter struct {
+	Field    string `json:"field"`
+	Operator string `json:"operator"`
+	Value    string `json:"value"`
+}
+
+type taskListSortRule struct {
+	Field     string `json:"field"`
+	Direction string `json:"direction"`
+}
+
+type preparedTaskListItem struct {
+	task                   model.Task
+	item                   map[string]interface{}
+	displayLabels          []string
+	subscriptionLabels     []string
+	notificationChannelMap map[uint]taskNotificationChannelInfo
+}
 
 func (h *TaskHandler) List(c *gin.Context) {
 	keyword := c.Query("keyword")
 	statusStr := c.Query("status")
 	label := c.Query("label")
+	filters := parseTaskListFilters(c.Query("filters"))
+	sortRules := parseTaskListSortRules(c.Query("sort_rules"))
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 
@@ -44,46 +67,83 @@ func (h *TaskHandler) List(c *gin.Context) {
 		query = query.Where("labels LIKE ?", "%"+label+"%")
 	}
 
-	var total int64
-	query.Count(&total)
+	if len(filters) == 0 && len(sortRules) == 0 {
+		var total int64
+		if err := query.Count(&total).Error; err != nil {
+			response.InternalError(c, "加载任务列表失败")
+			return
+		}
+
+		var tasks []model.Task
+		if err := applyDefaultTaskListOrdering(query.Session(&gorm.Session{})).
+			Offset((page - 1) * pageSize).
+			Limit(pageSize).
+			Find(&tasks).Error; err != nil {
+			response.InternalError(c, "加载任务列表失败")
+			return
+		}
+
+		respondTaskList(c, tasks, total, page, pageSize)
+		return
+	}
 
 	var tasks []model.Task
-	query.Find(&tasks)
-
-	sort.SliceStable(tasks, func(i, j int) bool {
-		left := tasks[i]
-		right := tasks[j]
-
-		leftGroup := taskSortGroup(left.Status)
-		rightGroup := taskSortGroup(right.Status)
-		if leftGroup != rightGroup {
-			return leftGroup < rightGroup
-		}
-		if left.IsPinned != right.IsPinned {
-			return left.IsPinned
-		}
-		if left.SortOrder != right.SortOrder {
-			return left.SortOrder < right.SortOrder
-		}
-		return left.CreatedAt.After(right.CreatedAt)
-	})
-
-	start := (page - 1) * pageSize
-	if start > len(tasks) {
-		start = len(tasks)
+	if err := query.Find(&tasks).Error; err != nil {
+		response.InternalError(c, "加载任务列表失败")
+		return
 	}
-	end := start + pageSize
-	if end > len(tasks) {
-		end = len(tasks)
-	}
-	tasks = tasks[start:end]
+
 	subscriptionNames := loadSubscriptionNameMap(tasks)
 	notificationChannels := loadTaskNotificationChannelMap(tasks)
+	prepared := prepareTaskListItems(tasks, subscriptionNames, notificationChannels)
+	prepared = filterPreparedTaskListItems(prepared, filters)
+	sortPreparedTaskListItems(prepared, sortRules)
 
-	data := make([]map[string]interface{}, len(tasks))
-	for i, task := range tasks {
+	total := int64(len(prepared))
+	start := (page - 1) * pageSize
+	if start > len(prepared) {
+		start = len(prepared)
+	}
+	end := start + pageSize
+	if end > len(prepared) {
+		end = len(prepared)
+	}
+	prepared = prepared[start:end]
+
+	respondPreparedTaskList(c, prepared, total, page, pageSize)
+}
+
+func applyDefaultTaskListOrdering(query *gorm.DB) *gorm.DB {
+	return query.
+		Order("CASE WHEN status IN (1, 0.5, 2) THEN 0 WHEN status = 0 THEN 1 ELSE 2 END ASC").
+		Order("is_pinned DESC").
+		Order("sort_order ASC").
+		Order("created_at DESC")
+}
+
+func respondTaskList(c *gin.Context, tasks []model.Task, total int64, page, pageSize int) {
+	subscriptionNames := loadSubscriptionNameMap(tasks)
+	notificationChannels := loadTaskNotificationChannelMap(tasks)
+	prepared := prepareTaskListItems(tasks, subscriptionNames, notificationChannels)
+	respondPreparedTaskList(c, prepared, total, page, pageSize)
+}
+
+func respondPreparedTaskList(c *gin.Context, prepared []preparedTaskListItem, total int64, page, pageSize int) {
+	data := make([]map[string]interface{}, len(prepared))
+	for i := range prepared {
+		data[i] = prepared[i].item
+	}
+
+	response.Paginated(c, data, total, page, pageSize)
+}
+
+func prepareTaskListItems(tasks []model.Task, subscriptionNames map[uint]string, notificationChannels map[uint]taskNotificationChannelInfo) []preparedTaskListItem {
+	prepared := make([]preparedTaskListItem, 0, len(tasks))
+	for _, task := range tasks {
+		displayLabels, subscriptionLabels := buildPreparedTaskLabels(task.GetLabels(), subscriptionNames)
+
 		item := task.ToDict()
-		item["display_labels"] = buildTaskDisplayLabels(task.GetLabels(), subscriptionNames)
+		item["display_labels"] = displayLabels
 		if task.NotificationChannelID != nil {
 			if channel, exists := notificationChannels[*task.NotificationChannelID]; exists {
 				item["notification_channel_name"] = channel.Name
@@ -96,10 +156,15 @@ func (h *TaskHandler) List(c *gin.Context) {
 				item["next_run_at"] = nextTimes[0]
 			}
 		}
-		data[i] = item
-	}
 
-	response.Paginated(c, data, total, page, pageSize)
+		prepared = append(prepared, preparedTaskListItem{
+			task:               task,
+			item:               item,
+			displayLabels:      displayLabels,
+			subscriptionLabels: subscriptionLabels,
+		})
+	}
+	return prepared
 }
 
 func taskSortGroup(status float64) int {
@@ -111,6 +176,21 @@ func taskSortGroup(status float64) int {
 	default:
 		return 2
 	}
+}
+
+func defaultTaskListLess(left, right model.Task) bool {
+	leftGroup := taskSortGroup(left.Status)
+	rightGroup := taskSortGroup(right.Status)
+	if leftGroup != rightGroup {
+		return leftGroup < rightGroup
+	}
+	if left.IsPinned != right.IsPinned {
+		return left.IsPinned
+	}
+	if left.SortOrder != right.SortOrder {
+		return left.SortOrder < right.SortOrder
+	}
+	return left.CreatedAt.After(right.CreatedAt)
 }
 
 func loadSubscriptionNameMap(tasks []model.Task) map[uint]string {
@@ -151,8 +231,15 @@ func loadSubscriptionNameMap(tasks []model.Task) map[uint]string {
 }
 
 func buildTaskDisplayLabels(labels []string, subscriptionNames map[uint]string) []string {
+	displayLabels, _ := buildPreparedTaskLabels(labels, subscriptionNames)
+	return displayLabels
+}
+
+func buildPreparedTaskLabels(labels []string, subscriptionNames map[uint]string) ([]string, []string) {
 	displayLabels := make([]string, 0, len(labels))
+	subscriptionLabels := make([]string, 0, len(labels))
 	seen := make(map[string]struct{})
+	seenSubscriptions := make(map[string]struct{})
 
 	addLabel := func(label string) {
 		label = strings.TrimSpace(label)
@@ -164,6 +251,17 @@ func buildTaskDisplayLabels(labels []string, subscriptionNames map[uint]string) 
 		}
 		seen[label] = struct{}{}
 		displayLabels = append(displayLabels, label)
+	}
+	addSubscriptionLabel := func(label string) {
+		label = strings.TrimSpace(label)
+		if label == "" {
+			return
+		}
+		if _, exists := seenSubscriptions[label]; exists {
+			return
+		}
+		seenSubscriptions[label] = struct{}{}
+		subscriptionLabels = append(subscriptionLabels, label)
 	}
 
 	for _, label := range labels {
@@ -180,13 +278,259 @@ func buildTaskDisplayLabels(labels []string, subscriptionNames map[uint]string) 
 
 		if subName := subscriptionNames[uint(subID)]; subName != "" {
 			addLabel(subName)
+			addSubscriptionLabel(subName)
 			continue
 		}
 
 		addLabel("订阅任务")
+		addSubscriptionLabel("订阅任务")
 	}
 
-	return displayLabels
+	return displayLabels, subscriptionLabels
+}
+
+func parseTaskListFilters(raw string) []taskListFilter {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+
+	var filters []taskListFilter
+	if err := json.Unmarshal([]byte(raw), &filters); err != nil {
+		return nil
+	}
+
+	valid := make([]taskListFilter, 0, len(filters))
+	for _, filter := range filters {
+		filter.Field = strings.TrimSpace(filter.Field)
+		filter.Operator = strings.TrimSpace(filter.Operator)
+		filter.Value = strings.TrimSpace(filter.Value)
+		if filter.Field == "" || filter.Operator == "" || filter.Value == "" {
+			continue
+		}
+		valid = append(valid, filter)
+	}
+	return valid
+}
+
+func parseTaskListSortRules(raw string) []taskListSortRule {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+
+	var rules []taskListSortRule
+	if err := json.Unmarshal([]byte(raw), &rules); err != nil {
+		return nil
+	}
+
+	valid := make([]taskListSortRule, 0, len(rules))
+	for _, rule := range rules {
+		rule.Field = strings.TrimSpace(rule.Field)
+		rule.Direction = strings.ToLower(strings.TrimSpace(rule.Direction))
+		if rule.Field == "" {
+			continue
+		}
+		if rule.Direction != "desc" {
+			rule.Direction = "asc"
+		}
+		valid = append(valid, rule)
+	}
+	return valid
+}
+
+func filterPreparedTaskListItems(items []preparedTaskListItem, filters []taskListFilter) []preparedTaskListItem {
+	if len(filters) == 0 {
+		return items
+	}
+
+	filtered := make([]preparedTaskListItem, 0, len(items))
+	for _, item := range items {
+		if preparedTaskMatchesFilters(item, filters) {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered
+}
+
+func preparedTaskMatchesFilters(item preparedTaskListItem, filters []taskListFilter) bool {
+	for _, filter := range filters {
+		values := preparedTaskFilterValues(item, filter.Field)
+		if !matchTaskFilterValues(values, filter.Operator, filter.Value) {
+			return false
+		}
+	}
+	return true
+}
+
+func preparedTaskFilterValues(item preparedTaskListItem, field string) []string {
+	switch field {
+	case "command":
+		return []string{strings.TrimSpace(item.task.Command)}
+	case "name":
+		return []string{strings.TrimSpace(item.task.Name)}
+	case "cron_expression":
+		raw := strings.TrimSpace(item.task.CronExpression)
+		if raw == "" {
+			return nil
+		}
+		values := make([]string, 0, 2)
+		values = append(values, raw)
+		for _, expression := range splitTaskCronExpressionLines(raw) {
+			values = append(values, expression)
+		}
+		return values
+	case "status":
+		return []string{
+			strconv.FormatFloat(item.task.Status, 'f', -1, 64),
+			taskStatusFilterText(item.task.Status),
+			taskStatusFilterAlias(item.task.Status),
+		}
+	case "labels":
+		return item.displayLabels
+	case "subscription":
+		return item.subscriptionLabels
+	default:
+		return nil
+	}
+}
+
+func matchTaskFilterValues(values []string, operator, target string) bool {
+	target = strings.ToLower(strings.TrimSpace(target))
+	if target == "" {
+		return true
+	}
+
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value != "" {
+			normalized = append(normalized, value)
+		}
+	}
+
+	switch operator {
+	case "contains":
+		for _, value := range normalized {
+			if strings.Contains(value, target) {
+				return true
+			}
+		}
+		return false
+	case "not_contains":
+		for _, value := range normalized {
+			if strings.Contains(value, target) {
+				return false
+			}
+		}
+		return true
+	case "equals":
+		for _, value := range normalized {
+			if value == target {
+				return true
+			}
+		}
+		return false
+	case "not_equals":
+		for _, value := range normalized {
+			if value == target {
+				return false
+			}
+		}
+		return true
+	default:
+		return true
+	}
+}
+
+func taskStatusFilterText(status float64) string {
+	switch status {
+	case model.TaskStatusDisabled:
+		return "禁用中"
+	case model.TaskStatusQueued:
+		return "排队中"
+	case model.TaskStatusRunning:
+		return "运行中"
+	default:
+		return "空闲中"
+	}
+}
+
+func taskStatusFilterAlias(status float64) string {
+	switch status {
+	case model.TaskStatusDisabled:
+		return "已禁用"
+	case model.TaskStatusQueued:
+		return "排队中"
+	case model.TaskStatusRunning:
+		return "运行中"
+	default:
+		return "已启用"
+	}
+}
+
+func sortPreparedTaskListItems(items []preparedTaskListItem, sortRules []taskListSortRule) {
+	sort.SliceStable(items, func(i, j int) bool {
+		left := items[i]
+		right := items[j]
+
+		for _, rule := range sortRules {
+			comparison := comparePreparedTaskByRule(left, right, rule)
+			if comparison == 0 {
+				continue
+			}
+			if rule.Direction == "desc" {
+				return comparison > 0
+			}
+			return comparison < 0
+		}
+
+		return defaultTaskListLess(left.task, right.task)
+	})
+}
+
+func comparePreparedTaskByRule(left, right preparedTaskListItem, rule taskListSortRule) int {
+	switch rule.Field {
+	case "name":
+		return strings.Compare(strings.ToLower(strings.TrimSpace(left.task.Name)), strings.ToLower(strings.TrimSpace(right.task.Name)))
+	case "command":
+		return strings.Compare(strings.ToLower(strings.TrimSpace(left.task.Command)), strings.ToLower(strings.TrimSpace(right.task.Command)))
+	case "cron_expression":
+		return strings.Compare(strings.ToLower(strings.TrimSpace(left.task.CronExpression)), strings.ToLower(strings.TrimSpace(right.task.CronExpression)))
+	case "status":
+		return compareFloat64(left.task.Status, right.task.Status)
+	case "labels":
+		return strings.Compare(strings.ToLower(strings.Join(left.displayLabels, ",")), strings.ToLower(strings.Join(right.displayLabels, ",")))
+	case "subscription":
+		return strings.Compare(strings.ToLower(strings.Join(left.subscriptionLabels, ",")), strings.ToLower(strings.Join(right.subscriptionLabels, ",")))
+	default:
+		return 0
+	}
+}
+
+func compareFloat64(left, right float64) int {
+	switch {
+	case left < right:
+		return -1
+	case left > right:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func splitTaskCronExpressionLines(raw string) []string {
+	lines := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == '\n' || r == '\r'
+	})
+	result := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			result = append(result, line)
+		}
+	}
+	return result
 }
 
 func (h *TaskHandler) Stats(c *gin.Context) {

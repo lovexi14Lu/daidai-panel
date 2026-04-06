@@ -4,6 +4,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
 import { systemApi } from '@/api/system'
+import { loadPanelSettings as loadCachedPanelSettings } from '@/utils/panelSettings'
 import { useResponsive } from '@/composables/useResponsive'
 import {
   Bell,
@@ -127,9 +128,9 @@ function toggleSection() {
 
 async function loadPanelSettings() {
   try {
-    const res = await systemApi.panelSettings() as any
-    if (res.data?.panel_title) panelTitle.value = res.data.panel_title
-    if (res.data?.panel_icon) panelIcon.value = res.data.panel_icon
+    const settings = await loadCachedPanelSettings()
+    if (settings?.panel_title) panelTitle.value = settings.panel_title
+    if (settings?.panel_icon) panelIcon.value = settings.panel_icon
   } catch {}
 }
 

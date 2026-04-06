@@ -172,18 +172,55 @@ func currentManagedRuntimePaths() managedRuntimePaths {
 		dataDir = config.C.Data.Dir
 	}
 	depsDir := filepath.Join(dataDir, "deps")
+	venvDir := filepath.Join(depsDir, "python", "venv")
+	venvBin := resolveManagedVenvBin(venvDir)
 	nodeBin := filepath.Join(depsDir, "nodejs", "node_modules", ".bin")
-	venvBin := filepath.Join(depsDir, "python", "venv", "bin")
 	sanitizedPath := sanitizeManagedPath(os.Getenv("PATH"), nodeBin, venvBin)
 
 	return managedRuntimePaths{
 		NodeBin:          nodeBin,
 		NodeModules:      filepath.Join(depsDir, "nodejs", "node_modules"),
 		VenvBin:          venvBin,
-		VenvSitePackages: findVenvSitePackages(filepath.Join(depsDir, "python", "venv", "lib")),
+		VenvSitePackages: findVenvSitePackages(venvDir),
 		SanitizedPath:    sanitizedPath,
 		searchDirs:       splitPathDirs(sanitizedPath),
 	}
+}
+
+func resolveManagedVenvBin(venvDir string) string {
+	venvDir = strings.TrimSpace(venvDir)
+	if venvDir == "" {
+		return ""
+	}
+
+	candidates := []string{
+		filepath.Join(venvDir, "Scripts"),
+		filepath.Join(venvDir, "bin"),
+	}
+	if runtime.GOOS != "windows" {
+		candidates[0], candidates[1] = candidates[1], candidates[0]
+	}
+
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return candidate
+		}
+	}
+
+	if runtime.GOOS == "windows" {
+		return filepath.Join(venvDir, "Scripts")
+	}
+	return filepath.Join(venvDir, "bin")
+}
+
+func ResolveManagedPipBinary() string {
+	runtimePaths := currentManagedRuntimePaths()
+	for _, name := range []string{"pip3", "pip"} {
+		if binary := findExecutableInDir(runtimePaths.VenvBin, name); binary != "" {
+			return binary
+		}
+	}
+	return ""
 }
 
 func createManagedPythonCommand(scriptPath string, scriptArgs []string, workDir string, envVars map[string]string, runtimePaths managedRuntimePaths) (*exec.Cmd, func(), error) {
@@ -221,10 +258,12 @@ func createManagedNodeCommand(scriptPath string, scriptArgs []string, workDir st
 	if err != nil {
 		return nil, nil, err
 	}
+	nodeModulesCleanup := ensureManagedNodeModulesAccess(workDir, runtimePaths.NodeModules)
 
 	preloadFile, preloadErr := writeNodePreloadScript(filepath.Dir(envFile), envFile, envVars)
 	if preloadErr != nil {
 		cleanup()
+		nodeModulesCleanup()
 		return nil, nil, preloadErr
 	}
 
@@ -235,7 +274,7 @@ func createManagedNodeCommand(scriptPath string, scriptArgs []string, workDir st
 	cmd.Dir = workDir
 	cmd.Env = buildBootstrapProcessEnv(envVars)
 	setPgid(cmd)
-	return cmd, cleanup, nil
+	return cmd, combineCleanup(cleanup, nodeModulesCleanup), nil
 }
 
 func createManagedTSNodeCommand(scriptPath string, scriptArgs []string, workDir string, envVars map[string]string, runtimePaths managedRuntimePaths) (*exec.Cmd, func(), error) {
@@ -243,10 +282,12 @@ func createManagedTSNodeCommand(scriptPath string, scriptArgs []string, workDir 
 	if err != nil {
 		return nil, nil, err
 	}
+	nodeModulesCleanup := ensureManagedNodeModulesAccess(workDir, runtimePaths.NodeModules)
 
 	preloadFile, preloadErr := writeNodePreloadScript(filepath.Dir(envFile), envFile, envVars)
 	if preloadErr != nil {
 		cleanup()
+		nodeModulesCleanup()
 		return nil, nil, preloadErr
 	}
 
@@ -258,12 +299,13 @@ func createManagedTSNodeCommand(scriptPath string, scriptArgs []string, workDir 
 		cmd.Dir = workDir
 		cmd.Env = buildBootstrapProcessEnv(envVars)
 		setPgid(cmd)
-		return cmd, cleanup, nil
+		return cmd, combineCleanup(cleanup, nodeModulesCleanup), nil
 	}
 
 	npxBin, err := resolveManagedBinary("npx", nil, runtimePaths.searchDirs)
 	if err != nil {
 		cleanup()
+		nodeModulesCleanup()
 		return nil, nil, err
 	}
 
@@ -274,7 +316,7 @@ func createManagedTSNodeCommand(scriptPath string, scriptArgs []string, workDir 
 	cmd.Dir = workDir
 	cmd.Env = buildBootstrapProcessEnv(envVars)
 	setPgid(cmd)
-	return cmd, cleanup, nil
+	return cmd, combineCleanup(cleanup, nodeModulesCleanup), nil
 }
 
 func createStandardManagedCommand(interpreter, scriptPath string, scriptArgs []string, workDir string, envVars map[string]string, runtimePaths managedRuntimePaths) (*exec.Cmd, func(), error) {
@@ -545,7 +587,18 @@ func isExecutableFile(path string) bool {
 	return info.Mode()&0o111 != 0
 }
 
-func findVenvSitePackages(venvLib string) string {
+func findVenvSitePackages(venvDir string) string {
+	venvDir = strings.TrimSpace(venvDir)
+	if venvDir == "" {
+		return ""
+	}
+
+	windowsSitePackages := filepath.Join(venvDir, "Lib", "site-packages")
+	if info, err := os.Stat(windowsSitePackages); err == nil && info.IsDir() {
+		return windowsSitePackages
+	}
+
+	venvLib := filepath.Join(venvDir, "lib")
 	entries, err := os.ReadDir(venvLib)
 	if err != nil {
 		return ""
@@ -556,6 +609,53 @@ func findVenvSitePackages(venvLib string) string {
 		}
 	}
 	return ""
+}
+
+func ensureManagedNodeModulesAccess(workDir, nodeModules string) func() {
+	workDir = strings.TrimSpace(workDir)
+	nodeModules = strings.TrimSpace(nodeModules)
+	if workDir == "" || nodeModules == "" {
+		return func() {}
+	}
+
+	if info, err := os.Stat(nodeModules); err != nil || !info.IsDir() {
+		return func() {}
+	}
+
+	linkPath := filepath.Join(workDir, "node_modules")
+	if _, err := os.Lstat(linkPath); err == nil || !os.IsNotExist(err) {
+		return func() {}
+	}
+
+	if err := createManagedDirectoryLink(nodeModules, linkPath); err != nil {
+		return func() {}
+	}
+
+	return func() {
+		_ = os.Remove(linkPath)
+	}
+}
+
+func createManagedDirectoryLink(target, link string) error {
+	if runtime.GOOS == "windows" {
+		cmd := exec.Command("cmd", "/C", "mklink", "/J", link, target)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("create node_modules junction: %w: %s", err, strings.TrimSpace(string(output)))
+		}
+		return nil
+	}
+
+	return os.Symlink(target, link)
+}
+
+func combineCleanup(cleanups ...func()) func() {
+	return func() {
+		for _, cleanup := range cleanups {
+			if cleanup != nil {
+				cleanup()
+			}
+		}
+	}
 }
 
 func sanitizeManagedPath(currentPath, nodeBin, venvBin string) string {

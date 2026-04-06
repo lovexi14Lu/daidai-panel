@@ -33,3 +33,31 @@ func TestResolveCronForSubscriptionTaskIgnoresDocstringCronForOtherFile(t *testi
 		t.Fatalf("expected fallback cron for mismatched filename, got %q", got)
 	}
 }
+
+func TestResolveSubscriptionTaskNamePrefersNewEnvTitle(t *testing.T) {
+	root := t.TempDir()
+	scriptPath := filepath.Join(root, "main.py")
+	content := "\"\"\"\nnew Env('华星电信999答题');\ncron: 1 1 1 1 1\n\"\"\"\nprint('hello')\n"
+	if err := os.WriteFile(scriptPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	got := resolveSubscriptionTaskName(scriptPath, "main")
+	if got != "华星电信999答题" {
+		t.Fatalf("expected task name from new Env title, got %q", got)
+	}
+}
+
+func TestResolveSubscriptionTaskNameFallsBackToFilenameWhenNoNewEnvTitle(t *testing.T) {
+	root := t.TempDir()
+	scriptPath := filepath.Join(root, "main.py")
+	content := "print('hello')\n"
+	if err := os.WriteFile(scriptPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	got := resolveSubscriptionTaskName(scriptPath, "main")
+	if got != "main" {
+		t.Fatalf("expected fallback task name, got %q", got)
+	}
+}

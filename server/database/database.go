@@ -113,7 +113,7 @@ func EnsureColumns() {
 		{"random_delay_seconds", "INTEGER"},
 		{"max_retries", "INTEGER DEFAULT 0"},
 		{"retry_interval", "INTEGER DEFAULT 60"},
-		{"notify_on_failure", "BOOLEAN DEFAULT 1"},
+		{"notify_on_failure", "BOOLEAN DEFAULT 0"},
 		{"notify_on_success", "BOOLEAN DEFAULT 0"},
 		{"notification_channel_id", "INTEGER"},
 		{"depends_on", "INTEGER"},

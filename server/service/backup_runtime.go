@@ -1150,16 +1150,24 @@ func copyFile(sourcePath, targetPath string) error {
 }
 
 func reinstallDependenciesAsync(deps []model.Dependency) {
+	reinstallDependenciesAsyncWithLogPrefix(deps, "[恢复备份]")
+}
+
+func reinstallDependenciesAfterRestartAsync(deps []model.Dependency) {
+	reinstallDependenciesAsyncWithLogPrefix(deps, "[启动校验]")
+}
+
+func reinstallDependenciesAsyncWithLogPrefix(deps []model.Dependency, logPrefix string) {
 	go func() {
 		for _, dep := range deps {
-			reinstallDependency(dep)
+			reinstallDependency(dep, logPrefix)
 		}
 	}()
 }
 
-func reinstallDependency(dep model.Dependency) {
+func reinstallDependency(dep model.Dependency, logPrefix string) {
 	depsDir := filepath.Join(config.C.Data.Dir, "deps")
-	database.DB.Model(&model.Dependency{}).Where("id = ?", dep.ID).Update("log", fmt.Sprintf("[恢复备份] 正在安装 %s 依赖 %s", dep.Type, dep.Name))
+	database.DB.Model(&model.Dependency{}).Where("id = ?", dep.ID).Update("log", fmt.Sprintf("%s 正在安装 %s 依赖 %s", logPrefix, dep.Type, dep.Name))
 
 	var cmd *exec.Cmd
 	switch dep.Type {
@@ -1167,8 +1175,8 @@ func reinstallDependency(dep model.Dependency) {
 		cmd = exec.Command("npm", "install", "--prefix", filepath.Join(depsDir, "nodejs"), dep.Name)
 		cmd.Env = NpmInstallEnv(AppendProxyEnv(os.Environ()), CurrentNpmMirror())
 	case model.DepTypePython:
-		pipBin := filepath.Join(depsDir, "python", "venv", "bin", "pip")
-		if _, err := os.Stat(pipBin); err != nil {
+		pipBin := ResolveManagedPipBinary()
+		if strings.TrimSpace(pipBin) == "" {
 			pipBin = "pip3"
 		}
 		cmd = exec.Command(pipBin, "install", dep.Name)
@@ -1179,14 +1187,14 @@ func reinstallDependency(dep model.Dependency) {
 		if err != nil {
 			database.DB.Model(&model.Dependency{}).Where("id = ?", dep.ID).Updates(map[string]interface{}{
 				"status": model.DepStatusFailed,
-				"log":    "[恢复备份] " + err.Error(),
+				"log":    logPrefix + " " + err.Error(),
 			})
 			return
 		}
 	default:
 		database.DB.Model(&model.Dependency{}).Where("id = ?", dep.ID).Updates(map[string]interface{}{
 			"status": model.DepStatusFailed,
-			"log":    "[恢复备份] 不支持的依赖类型",
+			"log":    logPrefix + " 不支持的依赖类型",
 		})
 		return
 	}
@@ -1195,14 +1203,14 @@ func reinstallDependency(dep model.Dependency) {
 	if err != nil {
 		database.DB.Model(&model.Dependency{}).Where("id = ?", dep.ID).Updates(map[string]interface{}{
 			"status": model.DepStatusFailed,
-			"log":    fmt.Sprintf("[恢复备份] 安装失败\n%s", strings.TrimSpace(string(output))),
+			"log":    fmt.Sprintf("%s 安装失败\n%s", logPrefix, strings.TrimSpace(string(output))),
 		})
 		return
 	}
 
 	database.DB.Model(&model.Dependency{}).Where("id = ?", dep.ID).Updates(map[string]interface{}{
 		"status": model.DepStatusInstalled,
-		"log":    fmt.Sprintf("[恢复备份] 安装成功\n%s", strings.TrimSpace(string(output))),
+		"log":    fmt.Sprintf("%s 安装成功\n%s", logPrefix, strings.TrimSpace(string(output))),
 	})
 }
 

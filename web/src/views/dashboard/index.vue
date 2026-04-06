@@ -37,7 +37,18 @@
               <span class="title-sub">最近7天任务执行情况</span>
             </div>
           </template>
-          <ExecutionTrendChart :stats="dashboardData.daily_stats || []" />
+          <div ref="trendChartHostRef" class="trend-chart-shell">
+            <ExecutionTrendChart v-if="showTrendChart" :stats="dashboardData.daily_stats || []" />
+            <div v-else class="trend-chart-placeholder">
+              <div class="trend-chart-placeholder__bar"></div>
+              <div class="trend-chart-placeholder__bar trend-chart-placeholder__bar--short"></div>
+              <div class="trend-chart-placeholder__legend">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+            </div>
+          </div>
         </el-card>
       </el-col>
     </el-row>
@@ -147,7 +158,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, defineComponent, h, watch, defineAsyncComponent } from 'vue'
+import { ref, computed, onMounted, onUnmounted, onActivated, defineComponent, h, watch, defineAsyncComponent } from 'vue'
 import { systemApi } from '@/api/system'
 import {
   Timer, Check, ArrowRight, VideoPlay,
@@ -156,6 +167,10 @@ import { useResponsive } from '@/composables/useResponsive'
 
 const ExecutionTrendChart = defineAsyncComponent(() => import('./components/ExecutionTrendChart.vue'))
 const { isMobile } = useResponsive()
+const showTrendChart = ref(false)
+const trendChartHostRef = ref<HTMLElement | null>(null)
+let trendChartObserver: IntersectionObserver | null = null
+let trendChartTimer: number | null = null
 
 const CountUp = defineComponent({
   props: {
@@ -250,9 +265,61 @@ const loadSysInfo = async () => {
   } catch {}
 }
 
+function activateTrendChart() {
+  if (showTrendChart.value || trendChartTimer) {
+    return
+  }
+
+  trendChartTimer = window.setTimeout(() => {
+    showTrendChart.value = true
+    trendChartTimer = null
+  }, 120)
+}
+
+function stopObservingTrendChart() {
+  if (trendChartObserver) {
+    trendChartObserver.disconnect()
+    trendChartObserver = null
+  }
+}
+
+function scheduleTrendChartRender() {
+  if (showTrendChart.value || !trendChartHostRef.value) {
+    return
+  }
+
+  if (typeof window === 'undefined' || typeof IntersectionObserver === 'undefined') {
+    activateTrendChart()
+    return
+  }
+
+  stopObservingTrendChart()
+  trendChartObserver = new IntersectionObserver((entries) => {
+    if (!entries.some((entry) => entry.isIntersecting)) {
+      return
+    }
+    stopObservingTrendChart()
+    activateTrendChart()
+  }, { rootMargin: '160px 0px' })
+  trendChartObserver.observe(trendChartHostRef.value)
+}
+
 onMounted(() => {
   loadDashboard()
   loadSysInfo()
+  scheduleTrendChartRender()
+})
+
+onActivated(() => {
+  scheduleTrendChartRender()
+})
+
+onUnmounted(() => {
+  stopObservingTrendChart()
+  if (trendChartTimer) {
+    clearTimeout(trendChartTimer)
+    trendChartTimer = null
+  }
 })
 </script>
 
@@ -383,6 +450,58 @@ onMounted(() => {
 .chart-card {
   :deep(.el-card__header) {
     padding: 14px 20px;
+  }
+}
+
+.trend-chart-shell {
+  min-height: 280px;
+}
+
+.trend-chart-placeholder {
+  height: 280px;
+  border-radius: 16px;
+  padding: 20px 18px;
+  background: linear-gradient(180deg, rgba(64, 158, 255, 0.06), rgba(64, 158, 255, 0.015));
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 16px;
+}
+
+.trend-chart-placeholder__bar {
+  height: 12px;
+  width: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(64, 158, 255, 0.18), rgba(103, 194, 58, 0.1), rgba(245, 108, 108, 0.14));
+  animation: trend-placeholder-pulse 1.6s ease-in-out infinite;
+}
+
+.trend-chart-placeholder__bar--short {
+  width: 72%;
+  animation-delay: 0.12s;
+}
+
+.trend-chart-placeholder__legend {
+  display: inline-flex;
+  gap: 10px;
+}
+
+.trend-chart-placeholder__legend span {
+  width: 56px;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(140, 140, 140, 0.14);
+}
+
+@keyframes trend-placeholder-pulse {
+  0%, 100% {
+    opacity: 0.6;
+    transform: translateY(0);
+  }
+
+  50% {
+    opacity: 1;
+    transform: translateY(-2px);
   }
 }
 

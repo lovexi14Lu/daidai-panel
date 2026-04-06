@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
+import { ref, onMounted, onBeforeUnmount, onActivated, computed, watch } from 'vue'
 import { logApi } from '@/api/log'
 import { taskApi } from '@/api/task'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { openAuthorizedEventStream, type EventStreamConnection } from '@/utils/sse'
+import { usePageActivity } from '@/composables/usePageActivity'
 import { useResponsive } from '@/composables/useResponsive'
 
 const logs = ref<any[]>([])
@@ -21,6 +22,7 @@ const selectedIds = ref<number[]>([])
 const selectedIdSet = computed(() => new Set(selectedIds.value))
 const autoRefresh = ref(true)
 const { isMobile, dialogFullscreen } = useResponsive()
+const { isPageActive } = usePageActivity()
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 let logEventSource: EventStreamConnection | null = null
 const logContentRef = ref<HTMLElement>()
@@ -34,6 +36,8 @@ const logFilesLoading = ref(false)
 const showFileContent = ref(false)
 const fileContentData = ref('')
 const fileContentName = ref('')
+const hasRunningLogs = computed(() => logs.value.some(l => l.status === 2))
+let mounted = false
 
 async function loadLogs() {
   loading.value = true
@@ -50,18 +54,19 @@ async function loadLogs() {
     ElMessage.error('加载日志失败')
   } finally {
     loading.value = false
+    syncAutoRefresh()
   }
-}
-
-function hasRunningLogs() {
-  return logs.value.some(l => l.status === 2)
 }
 
 function startAutoRefresh() {
   stopAutoRefresh()
   refreshTimer = setInterval(async () => {
+    if (!isPageActive.value || !autoRefresh.value) {
+      stopAutoRefresh()
+      return
+    }
     await loadLogs()
-    if (!hasRunningLogs()) {
+    if (!hasRunningLogs.value) {
       stopAutoRefresh()
     }
   }, 5000)
@@ -74,11 +79,30 @@ function stopAutoRefresh() {
   }
 }
 
-onMounted(async () => {
-  await loadLogs()
-  if (autoRefresh.value && hasRunningLogs()) {
-    startAutoRefresh()
+function syncAutoRefresh() {
+  if (autoRefresh.value && hasRunningLogs.value && isPageActive.value) {
+    if (!refreshTimer) {
+      startAutoRefresh()
+    }
+    return
   }
+  stopAutoRefresh()
+}
+
+watch([autoRefresh, hasRunningLogs, isPageActive], () => {
+  syncAutoRefresh()
+})
+
+onMounted(async () => {
+  mounted = true
+  await loadLogs()
+})
+
+onActivated(() => {
+  if (!mounted) {
+    void loadLogs()
+  }
+  mounted = false
 })
 
 function handleSearch() {
@@ -220,8 +244,7 @@ async function handleBatchDelete() {
 function toggleAutoRefresh() {
   autoRefresh.value = !autoRefresh.value
   if (autoRefresh.value) {
-    loadLogs()
-    startAutoRefresh()
+    void loadLogs()
   } else {
     stopAutoRefresh()
   }

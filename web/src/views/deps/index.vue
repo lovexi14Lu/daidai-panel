@@ -270,10 +270,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, watch, computed } from 'vue'
+import { ref, onMounted, onBeforeUnmount, onActivated, watch, computed } from 'vue'
 import { depsApi, type MirrorsResponse } from '@/api/deps'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { openAuthorizedEventStream, type EventStreamConnection } from '@/utils/sse'
+import { usePageActivity } from '@/composables/usePageActivity'
 import { useResponsive } from '@/composables/useResponsive'
 
 const activeTab = ref('nodejs')
@@ -300,6 +301,7 @@ const batchReinstallRows = computed(() => selectedRows.value.filter(dep => !isPr
 const batchReinstallIds = computed(() => batchReinstallRows.value.map(dep => dep.id))
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 const { isMobile, dialogFullscreen } = useResponsive()
+const { isPageActive } = usePageActivity()
 
 const showMirrorDialog = ref(false)
 const mirrorLoading = ref(false)
@@ -315,6 +317,7 @@ const mirrorMeta = ref<MirrorsResponse>({
   linux_mirror_label: 'Linux',
   linux_mirror_message: '',
 })
+let mounted = false
 
 const nodejsCount = ref(0)
 const pythonCount = ref(0)
@@ -347,6 +350,12 @@ function statusLabel(status: string) {
 function isProcessing(status: string) {
   return status === 'queued' || status === 'installing' || status === 'removing'
 }
+
+const hasPendingDeps = computed(() => depsList.value.some(dep => isProcessing(dep.status)))
+
+watch([hasPendingDeps, isPageActive], () => {
+  syncPendingRefresh()
+})
 
 const linuxMirrorLabel = computed(() => mirrorMeta.value.linux_mirror_label || 'Linux')
 const linuxMirrorSupported = computed(() => mirrorMeta.value.linux_mirror_supported)
@@ -398,22 +407,34 @@ async function loadData() {
       linux: (v) => linuxCount.value = v,
     }
     countMap[activeTab.value]?.(depsList.value.length)
-    checkPending()
+    syncPendingRefresh()
   } catch {
-    depsList.value = []
+    if (!refreshTimer) {
+      depsList.value = []
+    }
+    syncPendingRefresh()
   } finally {
     loading.value = false
   }
 }
 
-function checkPending() {
-  const hasPending = depsList.value.some(d => isProcessing(d.status))
-  if (hasPending && !refreshTimer) {
-    refreshTimer = setInterval(loadData, 3000)
-  } else if (!hasPending && refreshTimer) {
+function stopRefreshTimer() {
+  if (refreshTimer) {
     clearInterval(refreshTimer)
     refreshTimer = null
   }
+}
+
+function syncPendingRefresh() {
+  if (hasPendingDeps.value && isPageActive.value) {
+    if (!refreshTimer) {
+      refreshTimer = setInterval(() => {
+        void loadData()
+      }, 3000)
+    }
+    return
+  }
+  stopRefreshTimer()
 }
 
 function parseNames(text: string): string[] {
@@ -633,6 +654,7 @@ async function handleSaveMirrors() {
 }
 
 onMounted(async () => {
+  mounted = true
   createType.value = activeTab.value
   loadData()
   const types = ['nodejs', 'python', 'linux'] as const
@@ -643,9 +665,17 @@ onMounted(async () => {
     }
   }
 })
+
+onActivated(() => {
+  if (!mounted) {
+    void loadData()
+  }
+  mounted = false
+})
+
 onBeforeUnmount(() => {
   closeSSE()
-  if (refreshTimer) clearInterval(refreshTimer)
+  stopRefreshTimer()
   if (depsLogFlushRaf) { cancelAnimationFrame(depsLogFlushRaf); depsLogFlushRaf = 0 }
 })
 </script>

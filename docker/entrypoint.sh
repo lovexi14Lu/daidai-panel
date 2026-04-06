@@ -1,8 +1,9 @@
 #!/bin/sh
 
 DATA_DIR=${DATA_DIR:-/app/Dumb-Panel}
+SERVER_PID_FILE="${DATA_DIR}/run/daidai-server.pid"
 
-mkdir -p "${DATA_DIR}/scripts" "${DATA_DIR}/logs" "${DATA_DIR}/backups"
+mkdir -p "${DATA_DIR}/scripts" "${DATA_DIR}/logs" "${DATA_DIR}/backups" "${DATA_DIR}/run"
 mkdir -p "${DATA_DIR}/deps/nodejs" "${DATA_DIR}/deps/python"
 mkdir -p /tmp
 chmod 1777 /tmp
@@ -58,10 +59,15 @@ cors:
     - http://localhost:${PANEL_PORT}
 YAML
 
+if [ $# -gt 0 ]; then
+  exec "$@"
+fi
+
 nginx
 
 shutdown() {
     kill "$SERVER_PID" 2>/dev/null
+    rm -f "$SERVER_PID_FILE"
     exit 0
 }
 trap shutdown SIGTERM SIGINT
@@ -69,8 +75,10 @@ trap shutdown SIGTERM SIGINT
 while true; do
     /app/daidai-server &
     SERVER_PID=$!
+    echo "$SERVER_PID" > "$SERVER_PID_FILE"
     wait $SERVER_PID
     EXIT_CODE=$?
+    rm -f "$SERVER_PID_FILE"
     [ $EXIT_CODE -eq 0 ] && exit 0
     sleep 2
 done

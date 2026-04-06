@@ -48,6 +48,7 @@ const pinnedCountInCurrentPage = computed(() =>
 const currentPageOffset = computed(() => (showAllEnvs.value ? 0 : (page.value - 1) * pageSize.value))
 const showFooterBar = computed(() => total.value > 0 || selectedCountInCurrentPage.value > 0)
 const showPager = computed(() => !showAllEnvs.value && total.value > pageSize.value)
+const sortableEnabled = computed(() => !showAllEnvs.value && envList.value.length >= 2)
 const pageSizeOptions: Array<{ label: string; value: EnvPageSizeSelection }> = [
   { label: '20 / 页', value: '20' },
   { label: '50 / 页', value: '50' },
@@ -247,6 +248,13 @@ function clearQueuedSortableInit() {
 
 function queueSortableInit() {
   if (typeof window === 'undefined') return
+  if (!sortableEnabled.value) {
+    if (sortableInstance) {
+      sortableInstance.destroy()
+      sortableInstance = null
+    }
+    return
+  }
   clearQueuedSortableInit()
   sortableInitFrame = window.requestAnimationFrame(() => {
     sortableInitFrame = 0
@@ -371,7 +379,7 @@ async function initSortable() {
     sortableInstance.destroy()
     sortableInstance = null
   }
-  if (loading.value || envList.value.length < 2) return
+  if (loading.value || !sortableEnabled.value) return
   const el = document.querySelector(
     isMobile.value
       ? '.env-mobile-list'
@@ -848,7 +856,7 @@ function formatDateTime(t: string | null) {
                   </div>
                 </div>
                 <div class="env-card__tools">
-                  <el-icon class="drag-handle"><Rank /></el-icon>
+                  <el-icon class="drag-handle" :class="{ 'drag-handle--disabled': !sortableEnabled }"><Rank /></el-icon>
                   <span v-if="row.group" class="group-pill" :style="getGroupBadgeStyle(row.group)">
                     <span class="group-dot" />
                     {{ row.group }}
@@ -948,7 +956,7 @@ function formatDateTime(t: string | null) {
       </el-table-column>
       <el-table-column width="44" align="center">
         <template #default>
-          <el-icon class="drag-handle"><Rank /></el-icon>
+          <el-icon class="drag-handle" :class="{ 'drag-handle--disabled': !sortableEnabled }"><Rank /></el-icon>
         </template>
       </el-table-column>
       <el-table-column prop="name" label="变量名" min-width="188">
@@ -1090,6 +1098,10 @@ function formatDateTime(t: string | null) {
           清空选择
         </el-button>
       </div>
+
+      <span v-if="showAllEnvs" class="sort-suspend-hint">
+        “全部”模式已暂停拖拽排序，可明显降低大列表场景下的页面占用。
+      </span>
 
       <div class="pagination-container">
         <div class="page-size-control">
@@ -1560,8 +1572,26 @@ function formatDateTime(t: string | null) {
   &:active { cursor: grabbing; }
 }
 
+.drag-handle--disabled {
+  cursor: default;
+  opacity: 0.35;
+
+  &:hover {
+    color: var(--el-text-color-placeholder);
+  }
+
+  &:active {
+    cursor: default;
+  }
+}
+
 .top-action-active {
   box-shadow: 0 0 0 1px rgba(245, 166, 35, 0.2);
+}
+
+.sort-suspend-hint {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 
 .sortable-ghost {

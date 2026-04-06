@@ -167,5 +167,8 @@ func (h *ScriptHandler) Download(c *gin.Context) {
 		return
 	}
 
+	c.Header("Cache-Control", "no-store, no-cache, must-revalidate")
+	c.Header("Pragma", "no-cache")
+	c.Header("Expires", "0")
 	c.FileAttachment(full, filepath.Base(full))
 }

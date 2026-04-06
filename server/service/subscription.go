@@ -393,7 +393,10 @@ func writeTempSSHKey(privateKey string) (string, error) {
 	return tmpFile.Name(), nil
 }
 
-var cronCommentRe = regexp.MustCompile(`(?im)^\s*#?\s*cron\s*[:：]\s*(.+)$`)
+var (
+	cronCommentRe          = regexp.MustCompile(`(?im)^\s*#?\s*cron\s*[:：]\s*(.+)$`)
+	subscriptionTaskNameRe = regexp.MustCompile(`new\s+Env\s*\(\s*['"` + "`" + `]([^'"` + "`" + `]+)['"` + "`" + `]\s*\)`)
+)
 
 type subscriptionTaskSyncOptions struct {
 	autoAdd     bool
@@ -660,7 +663,7 @@ func collectSubscriptionTaskCandidates(sub *model.Subscription, options subscrip
 			return nil
 		}
 		command := "task " + relPath
-		taskName := strings.TrimSuffix(info.Name(), filepath.Ext(info.Name()))
+		taskName := resolveSubscriptionTaskName(path, strings.TrimSuffix(info.Name(), filepath.Ext(info.Name())))
 		candidates[command] = subscriptionTaskCandidate{
 			Name:           taskName,
 			Command:        command,
@@ -703,6 +706,34 @@ func resolveCronForSubscriptionTask(path string, defaultCron string) string {
 		}
 	}
 	return strings.TrimSpace(defaultCron)
+}
+
+func resolveSubscriptionTaskName(path, fallback string) string {
+	fallback = strings.TrimSpace(fallback)
+
+	f, err := os.Open(path)
+	if err != nil {
+		return fallback
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	lineCount := 0
+	for scanner.Scan() {
+		lineCount++
+		if lineCount > 120 {
+			break
+		}
+
+		if matches := subscriptionTaskNameRe.FindStringSubmatch(scanner.Text()); len(matches) > 1 {
+			name := strings.TrimSpace(matches[1])
+			if name != "" {
+				return name
+			}
+		}
+	}
+
+	return fallback
 }
 
 func extractSubscriptionCronExpression(line, scriptBase string) string {

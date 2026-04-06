@@ -57,3 +57,27 @@ func TestBuildManagedPythonPathPrioritizesWorkDirAndScriptsDir(t *testing.T) {
 		}
 	}
 }
+
+func TestFindVenvSitePackagesSupportsWindowsLayout(t *testing.T) {
+	venvDir := filepath.Join(t.TempDir(), "venv")
+	sitePackages := filepath.Join(venvDir, "Lib", "site-packages")
+	if err := os.MkdirAll(sitePackages, 0o755); err != nil {
+		t.Fatalf("mkdir site-packages: %v", err)
+	}
+
+	if got := findVenvSitePackages(venvDir); got != sitePackages {
+		t.Fatalf("expected windows site-packages path %q, got %q", sitePackages, got)
+	}
+}
+
+func TestResolveManagedVenvBinUsesExistingScriptsDir(t *testing.T) {
+	venvDir := filepath.Join(t.TempDir(), "venv")
+	scriptsDir := filepath.Join(venvDir, "Scripts")
+	if err := os.MkdirAll(scriptsDir, 0o755); err != nil {
+		t.Fatalf("mkdir scripts dir: %v", err)
+	}
+
+	if got := resolveManagedVenvBin(venvDir); got != scriptsDir {
+		t.Fatalf("expected Scripts dir %q, got %q", scriptsDir, got)
+	}
+}

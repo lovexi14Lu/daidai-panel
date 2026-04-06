@@ -24,10 +24,18 @@ func DependencyInstalled(depType, name string) bool {
 			return info.IsDir()
 		}
 	case model.DepTypePython:
-		for _, pipBin := range []string{
+		candidates := []string{
+			ResolveManagedPipBinary(),
 			filepath.Join(depsDir, "python", "venv", "bin", "pip"),
+			filepath.Join(depsDir, "python", "venv", "bin", "pip3"),
 			filepath.Join(depsDir, "python", "venv", "Scripts", "pip.exe"),
-		} {
+			filepath.Join(depsDir, "python", "venv", "Scripts", "pip3.exe"),
+		}
+		for _, pipBin := range candidates {
+			pipBin = strings.TrimSpace(pipBin)
+			if pipBin == "" {
+				continue
+			}
 			if _, err := os.Stat(pipBin); err == nil {
 				if out, err := exec.Command(pipBin, "show", name).CombinedOutput(); err == nil && strings.Contains(string(out), "Name:") {
 					return true

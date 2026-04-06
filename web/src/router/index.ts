@@ -1,6 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { systemApi } from '@/api/system'
+import { getCachedPanelTitle, loadPanelSettings } from '@/utils/panelSettings'
 
 const roleLevel: Record<string, number> = {
   viewer: 1,
@@ -20,11 +20,6 @@ const legacyRouteMap: Record<string, string> = {
   '/open-api': '/admin/open-api',
   '/admin/deps': '/deps',
 }
-
-let cachedPanelTitle = '呆呆面板'
-systemApi.panelSettings().then((res: any) => {
-  if (res.data?.panel_title) cachedPanelTitle = res.data.panel_title
-}).catch(() => {})
 
 const router = createRouter({
   history: createWebHistory(),
@@ -207,7 +202,15 @@ router.beforeEach(async (to, _from, next) => {
 
 router.afterEach((to) => {
   const title = to.meta.title as string | undefined
-  document.title = title ? `${cachedPanelTitle} - ${title}` : cachedPanelTitle
+  const panelTitle = getCachedPanelTitle()
+  document.title = title ? `${panelTitle} - ${title}` : panelTitle
+})
+
+void loadPanelSettings().then(() => {
+  const currentRoute = router.currentRoute.value
+  const title = currentRoute.meta.title as string | undefined
+  const panelTitle = getCachedPanelTitle()
+  document.title = title ? `${panelTitle} - ${title}` : panelTitle
 })
 
 export default router

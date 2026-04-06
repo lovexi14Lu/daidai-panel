@@ -1,7 +1,7 @@
 import request from './request'
 
 export const taskApi = {
-  list(params?: { keyword?: string; status?: number; label?: string; page?: number; page_size?: number }) {
+  list(params?: { keyword?: string; status?: number | string; label?: string; page?: number; page_size?: number; filters?: string; sort_rules?: string }) {
     return request.get('/tasks', { params }) as Promise<{ data: any[]; total: number; page: number; page_size: number }>
   },
 

@@ -98,6 +98,7 @@ export function useSettingsConfig() {
         log_background_color: readConfigString(cfgs, 'log_background_color', '#0f172a'),
         log_background_image: readConfigString(cfgs, 'log_background_image', '')
       }
+      applyPanelAppearance(configForm.value)
     } catch {
       ElMessage.error('加载配置失败')
     } finally {
@@ -161,9 +162,14 @@ export function useSettingsConfig() {
     const reader = new FileReader()
     reader.onload = (e) => {
       configForm.value.log_background_image = e.target?.result as string
+      applyPanelAppearance(configForm.value)
     }
     reader.readAsDataURL(file)
     return false
+  }
+
+  function previewPanelAppearance() {
+    applyPanelAppearance(configForm.value)
   }
 
   function handleSaveTaskConfig() {
@@ -190,6 +196,7 @@ export function useSettingsConfig() {
     handleSaveSystemConfig,
     handleIconUpload,
     handleLogBackgroundUpload,
+    previewPanelAppearance,
     handleSaveTaskConfig,
     handleSaveProxy,
     handleSaveCaptcha

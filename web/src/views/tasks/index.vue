@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, onActivated, computed } from 'vue'
+import { ref, onMounted, onBeforeUnmount, onActivated, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { taskApi } from '@/api/task'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -9,18 +9,41 @@ import TaskDetail from './components/TaskDetail.vue'
 import LogFileBrowser from './components/LogFileBrowser.vue'
 import ViewManager from './components/ViewManager.vue'
 import { getDisplayTaskLabels } from './taskLabels'
+import { splitTaskCommandDisplay } from './taskCommand'
+import { usePageActivity } from '@/composables/usePageActivity'
 import { useResponsive } from '@/composables/useResponsive'
 import type { TaskViewFilter, TaskViewSortRule } from '@/api/taskView'
 
 const route = useRoute()
 const router = useRouter()
 const { isMobile } = useResponsive()
+const { isPageActive } = usePageActivity()
 let statusTimer: ReturnType<typeof setInterval> | null = null
+
+const TASK_PAGE_SIZE_STORAGE_KEY = 'dd:tasks:page_size'
+const supportedTaskPageSizes = [10, 20, 50, 100]
+
+function readStoredTaskPageSize() {
+  if (typeof window === 'undefined') {
+    return 20
+  }
+
+  const raw = window.localStorage.getItem(TASK_PAGE_SIZE_STORAGE_KEY)
+  const parsed = Number(raw)
+  return supportedTaskPageSizes.includes(parsed) ? parsed : 20
+}
+
+function persistTaskPageSize(value: number) {
+  if (typeof window === 'undefined') {
+    return
+  }
+  window.localStorage.setItem(TASK_PAGE_SIZE_STORAGE_KEY, String(value))
+}
 
 const tasks = ref<any[]>([])
 const total = ref(0)
 const page = ref(1)
-const pageSize = ref(20)
+const pageSize = ref(readStoredTaskPageSize())
 const keyword = ref('')
 const statusFilter = ref<string>('')
 const loading = ref(false)
@@ -40,37 +63,13 @@ const logFilesTaskId = ref<number | null>(null)
 const logFilesTaskName = ref('')
 const viewFilters = ref<TaskViewFilter[]>([])
 const viewSortRules = ref<TaskViewSortRule[]>([])
-
-const filteredTasks = computed(() => {
-  if (viewFilters.value.length === 0) return tasks.value
-  return tasks.value.filter(task => {
-    return viewFilters.value.every(filter => {
-      let fieldValue = ''
-      switch (filter.field) {
-        case 'command': fieldValue = task.command || ''; break
-        case 'name': fieldValue = task.name || ''; break
-        case 'cron_expression': fieldValue = task.cron_expression || ''; break
-        case 'status': fieldValue = String(task.status ?? ''); break
-        case 'labels': fieldValue = (task.labels || []).join(','); break
-        case 'subscription': fieldValue = (task.labels || []).filter((l: string) => l.startsWith('subscription:')).join(','); break
-        default: fieldValue = ''
-      }
-      const val = fieldValue.toLowerCase()
-      const target = filter.value.toLowerCase()
-      switch (filter.operator) {
-        case 'contains': return val.includes(target)
-        case 'not_contains': return !val.includes(target)
-        case 'equals': return val === target
-        case 'not_equals': return val !== target
-        default: return true
-      }
-    })
-  })
-})
+const canPollTaskStatus = computed(() => hasRunningTasks.value && isPageActive.value && selectedIds.value.length === 0)
 
 function handleViewChange(filters: TaskViewFilter[], sortRules: TaskViewSortRule[]) {
   viewFilters.value = filters
   viewSortRules.value = sortRules
+  page.value = 1
+  void loadTasks()
 }
 
 function getTaskTypeLabel(taskType: string | null | undefined) {
@@ -91,21 +90,42 @@ function getCronExpressions(task: any) {
 
 const hasRunningTasks = computed(() => tasks.value.some(t => t.status === 2))
 
+watch(pageSize, (value) => {
+  persistTaskPageSize(value)
+})
+
+watch(canPollTaskStatus, () => {
+  syncStatusPolling()
+})
+
+function buildTaskListParams() {
+  const params: Record<string, string | number> = {
+    page: page.value,
+    page_size: pageSize.value,
+  }
+  if (keyword.value) params.keyword = keyword.value
+  if (statusFilter.value !== '') params.status = statusFilter.value
+  if (viewFilters.value.length > 0) {
+    params.filters = JSON.stringify(viewFilters.value)
+  }
+  if (viewSortRules.value.length > 0) {
+    params.sort_rules = JSON.stringify(viewSortRules.value)
+  }
+  return params
+}
+
 function startStatusPolling() {
   stopStatusPolling()
   statusTimer = setInterval(async () => {
-    if (!hasRunningTasks.value) {
+    if (!canPollTaskStatus.value) {
       stopStatusPolling()
       return
     }
-    if (selectedIds.value.length > 0) return
     try {
-      const params: any = { page: page.value, page_size: pageSize.value }
-      if (keyword.value) params.keyword = keyword.value
-      if (statusFilter.value !== '') params.status = statusFilter.value
-      const res = await taskApi.list(params)
+      const res = await taskApi.list(buildTaskListParams())
       tasks.value = res.data
       total.value = res.total
+      syncStatusPolling()
     } catch {}
   }, 3000)
 }
@@ -117,18 +137,23 @@ function stopStatusPolling() {
   }
 }
 
+function syncStatusPolling() {
+  if (canPollTaskStatus.value) {
+    if (!statusTimer) {
+      startStatusPolling()
+    }
+    return
+  }
+  stopStatusPolling()
+}
+
 async function loadTasks() {
   loading.value = true
   try {
-    const params: any = { page: page.value, page_size: pageSize.value }
-    if (keyword.value) params.keyword = keyword.value
-    if (statusFilter.value !== '') params.status = statusFilter.value
-    const res = await taskApi.list(params)
+    const res = await taskApi.list(buildTaskListParams())
     tasks.value = res.data
     total.value = res.total
-    if (hasRunningTasks.value && !statusTimer) {
-      startStatusPolling()
-    }
+    syncStatusPolling()
   } catch {
     ElMessage.error('加载任务列表失败')
   } finally {
@@ -182,7 +207,7 @@ onBeforeUnmount(() => {
 
 function handleSearch() {
   page.value = 1
-  loadTasks()
+  void loadTasks()
 }
 
 function getStatusType(status: number) {
@@ -206,85 +231,13 @@ function formatTime(time: string | null) {
   return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
-const scriptFilePattern = /\.(?:js|ts|py|sh|go)$/i
-
-function tokenizeCommand(command: string) {
-  const tokens: string[] = []
-  let current = ''
-  let quote: '"' | "'" | null = null
-
-  for (let i = 0; i < command.length; i += 1) {
-    const char = command[i] ?? ''
-    if (quote) {
-      if (char === quote) {
-        quote = null
-        continue
-      }
-      current += char
-      continue
-    }
-
-    if (char === '"' || char === "'") {
-      quote = char
-      continue
-    }
-
-    if (/\s/.test(char)) {
-      if (current) {
-        tokens.push(current)
-        current = ''
-      }
-      continue
-    }
-
-    current += char
-  }
-
-  if (current) {
-    tokens.push(current)
-  }
-
-  return tokens
-}
-
-function firstScriptToken(tokens: string[]) {
-  return tokens.find(token => scriptFilePattern.test(token)) || null
-}
-
-function extractScriptPath(command: string) {
-  const tokens = tokenizeCommand(command)
-  if (tokens.length === 0) return null
-
-  const entry = tokens[0]
-  if (!entry) return null
-  const rest = tokens.slice(1)
-  const normalizedEntry = entry.toLowerCase()
-
-  if (normalizedEntry === 'task') {
-    for (let i = 0; i < rest.length; i += 1) {
-      const token = rest[i]
-      if (!token) continue
-      if (token === '--') break
-      if (token === '-m') {
-        i += 1
-        continue
-      }
-      if (scriptFilePattern.test(token)) {
-        return token
-      }
-    }
-    return null
-  }
-
-  if (['node', 'nodejs', 'python', 'python3', 'bash', 'sh', 'ts-node', 'go'].includes(normalizedEntry)) {
-    return firstScriptToken(rest)
-  }
-
-  return firstScriptToken(tokens)
-}
-
 function navigateToScript(path: string) {
   router.push({ path: '/scripts', query: { file: path } })
+}
+
+function handlePageSizeChange() {
+  page.value = 1
+  void loadTasks()
 }
 
 function getRunStatusType(status: number | null) {
@@ -355,8 +308,8 @@ async function handleRun(task: any) {
     ElMessage.success('任务已启动')
     task.status = 2
     openLogViewer(task)
-    loadTasks()
-    startStatusPolling()
+    syncStatusPolling()
+    void loadTasks()
   } catch (err: any) {
     ElMessage.error(err?.response?.data?.error || '启动失败')
   }
@@ -590,7 +543,7 @@ async function handleImport(event: Event) {
 
     <div v-if="isMobile" class="dd-mobile-list">
       <div
-        v-for="row in filteredTasks"
+        v-for="row in tasks"
         :key="row.id"
         class="dd-mobile-card task-card"
       >
@@ -629,9 +582,10 @@ async function handleImport(event: Event) {
 
             <div class="dd-mobile-card__subtitle task-card__command">
               <code class="command-text">
-                <template v-if="extractScriptPath(row.command)">
-                  <span>{{ row.command.replace(extractScriptPath(row.command), '') }}</span>
-                  <span class="script-link" @click.stop="navigateToScript(extractScriptPath(row.command)!)">{{ extractScriptPath(row.command) }}</span>
+                <template v-if="splitTaskCommandDisplay(row.command).script">
+                  <span>{{ splitTaskCommandDisplay(row.command).before }}</span>
+                  <span class="script-link" @click.stop="navigateToScript(splitTaskCommandDisplay(row.command).script!)">{{ splitTaskCommandDisplay(row.command).script }}</span>
+                  <span>{{ splitTaskCommandDisplay(row.command).after }}</span>
                 </template>
                 <template v-else>{{ row.command }}</template>
               </code>
@@ -715,7 +669,7 @@ async function handleImport(event: Event) {
     <el-table
       v-else
       v-loading="loading"
-      :data="filteredTasks"
+      :data="tasks"
       @selection-change="handleSelectionChange"
       stripe
       style="width: 100%"
@@ -744,9 +698,10 @@ async function handleImport(event: Event) {
       <el-table-column label="命令" min-width="160">
         <template #default="{ row }">
           <code class="command-text">
-            <template v-if="extractScriptPath(row.command)">
-              <span>{{ row.command.replace(extractScriptPath(row.command), '') }}</span>
-              <span class="script-link" @click.stop="navigateToScript(extractScriptPath(row.command)!)">{{ extractScriptPath(row.command) }}</span>
+            <template v-if="splitTaskCommandDisplay(row.command).script">
+              <span>{{ splitTaskCommandDisplay(row.command).before }}</span>
+              <span class="script-link" @click.stop="navigateToScript(splitTaskCommandDisplay(row.command).script!)">{{ splitTaskCommandDisplay(row.command).script }}</span>
+              <span>{{ splitTaskCommandDisplay(row.command).after }}</span>
             </template>
             <template v-else>{{ row.command }}</template>
           </code>
@@ -838,7 +793,7 @@ async function handleImport(event: Event) {
         :page-sizes="[10, 20, 50, 100]"
         layout="total, sizes, prev, pager, next"
         @current-change="loadTasks"
-        @size-change="loadTasks"
+        @size-change="handlePageSizeChange"
       />
     </div>
 

@@ -60,6 +60,56 @@ func TestReconcileDependenciesAfterRestartResumesRestoreJobs(t *testing.T) {
 	}
 }
 
+func TestReconcileDependenciesAfterRestartReinstallsMissingLinuxDeps(t *testing.T) {
+	testutil.SetupTestEnv(t)
+
+	dep := &model.Dependency{
+		Type:   model.DepTypeLinux,
+		Name:   "curl",
+		Status: model.DepStatusInstalled,
+		Log:    "[安装成功] curl",
+	}
+	if err := database.DB.Create(dep).Error; err != nil {
+		t.Fatalf("create dependency: %v", err)
+	}
+
+	originalInstalled := dependencyInstalledFunc
+	originalRestartReinstallBatch := dependencyRestartReinstallBatchFunc
+	t.Cleanup(func() {
+		dependencyInstalledFunc = originalInstalled
+		dependencyRestartReinstallBatchFunc = originalRestartReinstallBatch
+	})
+
+	dependencyInstalledFunc = func(depType, name string) bool {
+		return false
+	}
+
+	var resumed []model.Dependency
+	dependencyRestartReinstallBatchFunc = func(deps []model.Dependency) {
+		resumed = append(resumed, deps...)
+	}
+
+	ReconcileDependenciesAfterRestart()
+
+	if len(resumed) != 1 {
+		t.Fatalf("expected 1 linux dependency to auto-reinstall, got %d", len(resumed))
+	}
+	if resumed[0].ID != dep.ID {
+		t.Fatalf("expected resumed dependency id %d, got %d", dep.ID, resumed[0].ID)
+	}
+
+	var updated model.Dependency
+	if err := database.DB.First(&updated, dep.ID).Error; err != nil {
+		t.Fatalf("reload dependency: %v", err)
+	}
+	if updated.Status != model.DepStatusInstalling {
+		t.Fatalf("expected dependency to switch to installing, got %q", updated.Status)
+	}
+	if !strings.Contains(updated.Log, "已在重启后自动重新安装") {
+		t.Fatalf("expected automatic reinstall log, got %q", updated.Log)
+	}
+}
+
 func TestRestoreBackupManifestPreservesCurrentPanelUsers(t *testing.T) {
 	testutil.SetupTestEnv(t)
 
