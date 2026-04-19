@@ -32,7 +32,4 @@ data/
 log/
 /scripts/
 
-"daidai-panel.exe"
-
-*.zip
-magisk-mod/ 
+"daidai-panel.exe" 
